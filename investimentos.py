@@ -344,7 +344,7 @@ def main():
             if st.button("Buscar Ativo"):
                 if search_query:
                     ticker = search_query.strip().upper()
-                    # Se a pesquisa for para ativos da B3, garante que o ticker termine com .SA
+                    # Se a pesquisa for para ativos da B3, adiciona ".SA" caso não esteja presente
                     if usar_B3 and not ticker.endswith(".SA"):
                         ticker = ticker + ".SA"
                     info = get_stock_info(ticker)
@@ -352,9 +352,10 @@ def main():
                         price = info.get("regularMarketPrice", None)
                         shortName = info.get("shortName", ticker)
                         st.write(f"**{shortName} ({ticker})** - Cotação Atual: R$ {price:.2f}")
-                        if st.button("Favoritar Este Ativo"):
+                        if st.button("Favoritar Este Ativo", key=f"fav_add_{ticker}"):
                             add_favorite(username, ticker, shortName)
                             st.success(f"{shortName} adicionado aos favoritos!")
+                            st.experimental_rerun()
                     else:
                         st.error("Ativo não encontrado. Verifique o ticker ou nome da empresa/fundo.")
             
