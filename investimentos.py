@@ -335,13 +335,18 @@ def main():
                 st.info("Nenhum ativo cadastrado para simulação.")
 
         elif menu_opcao == "Cotações":
-            st.subheader("Consulta de Ativos e Favoritos")
+            st.subheader("Consulta de Ativos, Ações e FIIs da B3")
             
-            # Seção de busca
-            search_query = st.text_input("Digite o ticker ou nome da empresa")
+            # Campo de busca e opção para pesquisar na B3
+            search_query = st.text_input("Digite o ticker ou nome da empresa/fundo")
+            usar_B3 = st.checkbox("Pesquisar na B3 (.SA automaticamente)", value=True)
+            
             if st.button("Buscar Ativo"):
                 if search_query:
-                    ticker = search_query.upper().strip()
+                    ticker = search_query.strip().upper()
+                    # Se a pesquisa for para ativos da B3, garante que o ticker termine com .SA
+                    if usar_B3 and not ticker.endswith(".SA"):
+                        ticker = ticker + ".SA"
                     info = get_stock_info(ticker)
                     if info and "regularMarketPrice" in info:
                         price = info.get("regularMarketPrice", None)
@@ -351,12 +356,11 @@ def main():
                             add_favorite(username, ticker, shortName)
                             st.success(f"{shortName} adicionado aos favoritos!")
                     else:
-                        st.error("Ativo não encontrado. Verifique o ticker ou nome da empresa.")
+                        st.error("Ativo não encontrado. Verifique o ticker ou nome da empresa/fundo.")
             
-            # Auto-refresh dos favoritos a cada 30 segundos
+            # Auto-refresh dos favoritos a cada 30 segundos para atualizar as cotações
             st_autorefresh(interval=30000, key="fav_autorefresh")
             
-            # Seção de favoritos
             st.write("### Favoritos")
             favorites = get_favorites(username)
             if favorites:
@@ -366,7 +370,7 @@ def main():
                     if info and "regularMarketPrice" in info:
                         price = info.get("regularMarketPrice", None)
                         shortName = info.get("shortName", ticker)
-                        col1, col2, col3 = st.columns([3,2,1])
+                        col1, col2, col3 = st.columns([3, 2, 1])
                         col1.write(f"**{shortName} ({ticker})**")
                         col2.write(f"Cotação: R$ {price:.2f}")
                         if col3.button("Remover", key=f"rem_fav_{fav['id']}"):
