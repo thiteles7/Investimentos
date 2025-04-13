@@ -10,14 +10,15 @@ from streamlit_autorefresh import st_autorefresh
 # ---------------- CONFIGURAÇÃO ------------------
 DB_PATH = "investments.db"
 
-# Criação/Conexão com o banco de dados SQLite
+# Função que sempre retorna uma nova conexão com o banco, garantindo que as operações sejam efetivadas
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 # Criação das tabelas necessárias (usuários, carteira, classes e favoritos)
-def create_tables(conn):
+def create_tables():
+    conn = get_db_connection()
     with conn:
         # Tabela de usuários com senha hasheada
         conn.execute('''
@@ -27,7 +28,7 @@ def create_tables(conn):
                 password_hash TEXT NOT NULL
             )
         ''')
-        # Tabela de ativos (portfolio) com nova coluna asset_class
+        # Tabela de ativos (portfolio) com coluna asset_class
         conn.execute('''
             CREATE TABLE IF NOT EXISTS portfolio (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,15 +58,17 @@ def create_tables(conn):
             )
         ''')
 
-conn = get_db_connection()
-create_tables(conn)
+# Executa a criação das tabelas
+create_tables()
 
 # ---------------- FUNÇÕES DE USUÁRIO ------------------
 def get_user(username: str):
+    conn = get_db_connection()
     cur = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
     return cur.fetchone()
 
 def create_user(username: str, password: str):
+    conn = get_db_connection()
     pw_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
         with conn:
@@ -83,10 +86,12 @@ def verify_user(username: str, password: str):
 
 # ---------------- FUNÇÕES DE CARTEIRA ------------------
 def get_portfolio(username: str):
+    conn = get_db_connection()
     cur = conn.execute("SELECT * FROM portfolio WHERE username = ?", (username,))
     return cur.fetchall()
 
 def add_asset(username: str, asset_name: str, asset_class: str, target_percent: float, current_value: float):
+    conn = get_db_connection()
     with conn:
         conn.execute(
             "INSERT INTO portfolio (username, asset_name, asset_class, target_percent, current_value) VALUES (?, ?, ?, ?, ?)",
@@ -94,6 +99,7 @@ def add_asset(username: str, asset_name: str, asset_class: str, target_percent: 
         )
 
 def update_asset(asset_id: int, asset_name: str, asset_class: str, target_percent: float, current_value: float):
+    conn = get_db_connection()
     with conn:
         conn.execute(
             "UPDATE portfolio SET asset_name = ?, asset_class = ?, target_percent = ?, current_value = ? WHERE id = ?",
@@ -101,15 +107,18 @@ def update_asset(asset_id: int, asset_name: str, asset_class: str, target_percen
         )
 
 def delete_asset(asset_id: int):
+    conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM portfolio WHERE id = ?", (asset_id,))
 
 # ---------------- FUNÇÕES DE CLASSES DE ATIVOS ------------------
 def get_asset_classes(username: str):
+    conn = get_db_connection()
     cur = conn.execute("SELECT * FROM asset_classes WHERE username = ?", (username,))
     return cur.fetchall()
 
 def add_asset_class(username: str, class_name: str, target_value: float):
+    conn = get_db_connection()
     with conn:
         conn.execute(
             "INSERT INTO asset_classes (username, class_name, target_value) VALUES (?, ?, ?)",
@@ -117,6 +126,7 @@ def add_asset_class(username: str, class_name: str, target_value: float):
         )
 
 def update_asset_class(class_id: int, class_name: str, target_value: float):
+    conn = get_db_connection()
     with conn:
         conn.execute(
             "UPDATE asset_classes SET class_name = ?, target_value = ? WHERE id = ?",
@@ -124,15 +134,18 @@ def update_asset_class(class_id: int, class_name: str, target_value: float):
         )
 
 def delete_asset_class(class_id: int):
+    conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM asset_classes WHERE id = ?", (class_id,))
 
 # ---------------- FUNÇÕES DE FAVORITOS ------------------
 def get_favorites(username: str):
+    conn = get_db_connection()
     cur = conn.execute("SELECT * FROM favorites WHERE username = ?", (username,))
     return cur.fetchall()
 
 def add_favorite(username: str, ticker: str, company_name: str):
+    conn = get_db_connection()
     with conn:
         conn.execute(
             "INSERT INTO favorites (username, ticker, company_name) VALUES (?, ?, ?)",
@@ -140,6 +153,7 @@ def add_favorite(username: str, ticker: str, company_name: str):
         )
 
 def delete_favorite(fav_id: int):
+    conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM favorites WHERE id = ?", (fav_id,))
 
@@ -344,7 +358,6 @@ def main():
             if st.button("Buscar Ativo"):
                 if search_query:
                     ticker = search_query.strip().upper()
-                    # Se a pesquisa for para ativos da B3, adiciona ".SA" caso não esteja presente
                     if usar_B3 and not ticker.endswith(".SA"):
                         ticker = ticker + ".SA"
                     info = get_stock_info(ticker)
@@ -359,7 +372,7 @@ def main():
                     else:
                         st.error("Ativo não encontrado. Verifique o ticker ou nome da empresa/fundo.")
             
-            # Auto-refresh dos favoritos a cada 30 segundos para atualizar as cotações
+            # Atualiza os favoritos automaticamente a cada 30 segundos
             st_autorefresh(interval=30000, key="fav_autorefresh")
             
             st.write("### Favoritos")
