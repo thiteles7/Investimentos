@@ -54,6 +54,22 @@ def main():
         else:
             st.error("Nome de usuário ou senha incorretos. Tente novamente.")
 
+    # ---------------- CRIAR NOVO USUÁRIO ------------------
+    st.title("📋 Criar Novo Usuário")
+    new_username = st.text_input("Novo nome de usuário:")
+    new_password = st.text_input("Nova senha:", type="password")
+    
+    if st.button("Criar Usuário"):
+        if new_username and new_password:
+            if new_username not in user_credentials:
+                user_credentials[new_username] = new_password
+                save_user_credentials(user_credentials)
+                st.success(f"Usuário {new_username} criado com sucesso!")
+            else:
+                st.error("Este nome de usuário já existe. Tente outro.")
+        else:
+            st.warning("Por favor, preencha ambos os campos para criar um novo usuário.")
+
     if "logged_in" in st.session_state and st.session_state.logged_in:
         # ---------------- APLICATIVO DE INVESTIMENTOS ------------------
         st.title("💰 App de Investimentos")
