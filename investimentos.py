@@ -5,17 +5,18 @@ import yfinance as yf
 import plotly.express as px
 import pandas as pd
 import os
+from streamlit_autorefresh import st_autorefresh
 
 # ---------------- CONFIGURAÇÃO ------------------
 DB_PATH = "investments.db"
 
-# Cria/conecta ao banco de dados SQLite
+# Criação/Conexão com o banco de dados SQLite
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-# Criação das tabelas necessárias (usuários, carteira e classes de ativos)
+# Criação das tabelas necessárias (usuários, carteira, classes e favoritos)
 def create_tables(conn):
     with conn:
         # Tabela de usuários com senha hasheada
@@ -46,6 +47,15 @@ def create_tables(conn):
                 target_value REAL NOT NULL DEFAULT 0.0
             )
         ''')
+        # Tabela para armazenar os ativos favoritados
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS favorites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                company_name TEXT
+            )
+        ''')
 
 conn = get_db_connection()
 create_tables(conn)
@@ -59,8 +69,7 @@ def create_user(username: str, password: str):
     pw_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
         with conn:
-            conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                         (username, pw_hash))
+            conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, pw_hash))
         return True
     except sqlite3.IntegrityError:
         return False
@@ -118,6 +127,22 @@ def delete_asset_class(class_id: int):
     with conn:
         conn.execute("DELETE FROM asset_classes WHERE id = ?", (class_id,))
 
+# ---------------- FUNÇÕES DE FAVORITOS ------------------
+def get_favorites(username: str):
+    cur = conn.execute("SELECT * FROM favorites WHERE username = ?", (username,))
+    return cur.fetchall()
+
+def add_favorite(username: str, ticker: str, company_name: str):
+    with conn:
+        conn.execute(
+            "INSERT INTO favorites (username, ticker, company_name) VALUES (?, ?, ?)",
+            (username, ticker.upper(), company_name)
+        )
+
+def delete_favorite(fav_id: int):
+    with conn:
+        conn.execute("DELETE FROM favorites WHERE id = ?", (fav_id,))
+
 # ---------------- FUNÇÕES FINANCEIRAS ------------------
 def fetch_stock_price(ticker: str):
     try:
@@ -130,7 +155,15 @@ def fetch_stock_price(ticker: str):
         st.error(f"Erro ao buscar cotação do ativo {ticker}: {e}")
     return None
 
-# Simulação de aporte por ativo (para compatibilidade com versões anteriores)
+def get_stock_info(ticker: str):
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        return info
+    except Exception as e:
+        st.error(f"Erro ao buscar informações do ativo {ticker}: {e}")
+    return None
+
 def simulate_rebalance_assets(portfolio_df: pd.DataFrame, extra_amount: float):
     total_current = portfolio_df["current_value"].sum()
     total_new = total_current + extra_amount
@@ -177,7 +210,7 @@ def main():
         st.sidebar.write(f"Usuário: {username}")
         
         menu_opcao = st.sidebar.radio("Escolha uma ação", 
-                                      ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Exportar Dados"])
+                                      ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Cotações", "Exportar Dados"])
         
         if menu_opcao == "Carteira":
             st.subheader("Sua Carteira")
@@ -189,7 +222,6 @@ def main():
                 for _, row in df_port.iterrows():
                     col1, col2, col3, col4, col5, col6 = st.columns([2, 2, 2, 2, 2, 1])
                     novo_nome = col1.text_input("Ativo", value=row["asset_name"], key=f"nome_{row['id']}")
-                    # Campo para asset class (pode ser editado manualmente ou preenchido via select)
                     novo_classe = col2.text_input("Classe", value=row["asset_class"] if row["asset_class"] else "", key=f"classe_{row['id']}")
                     novo_percent = col3.number_input("% Alvo", value=row["target_percent"], key=f"percent_{row['id']}")
                     novo_valor = col4.number_input("Valor Atual", value=row["current_value"], step=0.01, key=f"valor_{row['id']}")
@@ -208,13 +240,11 @@ def main():
 
         elif menu_opcao == "Nova Ação":
             st.subheader("Adicionar Novo Ativo")
-            # Busca as classes já cadastradas para preencher o selectbox
             classes = get_asset_classes(username)
             classes_list = [cl["class_name"] for cl in classes] if classes else []
             with st.form("form_novo_ativo", clear_on_submit=True):
                 novo_ticker = st.text_input("Ticker do Ativo (ex.: PETR4.SA ou AAPL)")
                 novo_percentual = st.number_input("% Alvo", min_value=0.0, step=0.1)
-                # Se houver classes, permite selecionar; caso contrário, permite digitar manualmente
                 if classes_list:
                     novo_classe = st.selectbox("Classe do Ativo", options=classes_list)
                 else:
@@ -228,7 +258,6 @@ def main():
                         else:
                             st.error("Não foi possível buscar a cotação.")
                 if st.form_submit_button("Adicionar Ativo"):
-                    # Se não foi buscado, o usuário deve informar manualmente o valor atual
                     if cotacao_atual is None:
                         valor_atual = st.number_input("Valor Atual", min_value=0.0, step=0.01)
                     else:
@@ -291,9 +320,7 @@ def main():
                 asset_classes = get_asset_classes(username)
                 if asset_classes:
                     df_class = pd.DataFrame(asset_classes, columns=asset_classes[0].keys())
-                    # Agrupa a carteira por asset_class e soma os valores investidos
                     df_port_group = df_port.groupby("asset_class")["current_value"].sum().reset_index()
-                    # Junta com as classes definidas (com a meta desejada)
                     df_merge = pd.merge(df_class, df_port_group, how="left", left_on="class_name", right_on="asset_class")
                     df_merge["current_value"] = df_merge["current_value"].fillna(0)
                     df_merge["aporte_ideal"] = df_merge["target_value"] - df_merge["current_value"]
@@ -307,6 +334,50 @@ def main():
             else:
                 st.info("Nenhum ativo cadastrado para simulação.")
 
+        elif menu_opcao == "Cotações":
+            st.subheader("Consulta de Ativos e Favoritos")
+            
+            # Seção de busca
+            search_query = st.text_input("Digite o ticker ou nome da empresa")
+            if st.button("Buscar Ativo"):
+                if search_query:
+                    ticker = search_query.upper().strip()
+                    info = get_stock_info(ticker)
+                    if info and "regularMarketPrice" in info:
+                        price = info.get("regularMarketPrice", None)
+                        shortName = info.get("shortName", ticker)
+                        st.write(f"**{shortName} ({ticker})** - Cotação Atual: R$ {price:.2f}")
+                        if st.button("Favoritar Este Ativo"):
+                            add_favorite(username, ticker, shortName)
+                            st.success(f"{shortName} adicionado aos favoritos!")
+                    else:
+                        st.error("Ativo não encontrado. Verifique o ticker ou nome da empresa.")
+            
+            # Auto-refresh dos favoritos a cada 30 segundos
+            st_autorefresh(interval=30000, key="fav_autorefresh")
+            
+            # Seção de favoritos
+            st.write("### Favoritos")
+            favorites = get_favorites(username)
+            if favorites:
+                for fav in favorites:
+                    ticker = fav["ticker"]
+                    info = get_stock_info(ticker)
+                    if info and "regularMarketPrice" in info:
+                        price = info.get("regularMarketPrice", None)
+                        shortName = info.get("shortName", ticker)
+                        col1, col2, col3 = st.columns([3,2,1])
+                        col1.write(f"**{shortName} ({ticker})**")
+                        col2.write(f"Cotação: R$ {price:.2f}")
+                        if col3.button("Remover", key=f"rem_fav_{fav['id']}"):
+                            delete_favorite(fav["id"])
+                            st.success(f"{shortName} removido dos favoritos.")
+                            st.experimental_rerun()
+                    else:
+                        st.write(f"Não foi possível obter a cotação para {ticker}.")
+            else:
+                st.info("Nenhum ativo favoritado.")
+                        
         elif menu_opcao == "Exportar Dados":
             st.subheader("Exportar sua Carteira")
             portfolio = get_portfolio(username)
