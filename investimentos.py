@@ -10,7 +10,7 @@ from streamlit_autorefresh import st_autorefresh
 # ---------------- CONFIGURAÇÃO ------------------
 DB_PATH = "investments.db"
 
-# Sempre retorna uma nova conexão para garantir que as operações sejam efetivadas
+# Função que sempre retorna uma nova conexão para garantir que as operações sejam efetivadas
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -185,7 +185,6 @@ def main():
     st.set_page_config(page_title="Investimentos", layout="wide")
     st.sidebar.title("Navegação")
 
-    # Verifica estado de login
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
 
@@ -222,7 +221,7 @@ def main():
         menu_opcao = st.sidebar.radio("Escolha uma ação", 
                                       ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Cotações", "Exportar Dados"])
         
-        # Seção Carteira (não modificada)
+        # Seção Carteira
         if menu_opcao == "Carteira":
             st.subheader("Sua Carteira")
             portfolio = get_portfolio(username)
@@ -241,15 +240,13 @@ def main():
                     if atualizar:
                         update_asset(row["id"], novo_nome, novo_classe, novo_percent, novo_valor)
                         st.success(f"Ativo {novo_nome} atualizado.")
-                        st.experimental_rerun()
                     if remover:
                         delete_asset(row["id"])
                         st.success(f"Ativo {novo_nome} removido.")
-                        st.experimental_rerun()
             else:
                 st.info("Nenhum ativo cadastrado.")
 
-        # Seção Nova Ação (não modificada)
+        # Seção Nova Ação
         elif menu_opcao == "Nova Ação":
             st.subheader("Adicionar Novo Ativo")
             classes = get_asset_classes(username)
@@ -276,9 +273,8 @@ def main():
                         valor_atual = cotacao_atual
                     add_asset(username, novo_ticker, novo_classe, novo_percentual, valor_atual)
                     st.success("Ativo adicionado com sucesso!")
-                    st.experimental_rerun()
 
-        # Seção Classes de Ativos (não modificada)
+        # Seção Classes de Ativos
         elif menu_opcao == "Classes de Ativos":
             st.subheader("Gerencie suas Classes de Ativos")
             classes = get_asset_classes(username)
@@ -294,11 +290,9 @@ def main():
                     if atualizar:
                         update_asset_class(row["id"], novo_nome, novo_target)
                         st.success(f"Classe {novo_nome} atualizada.")
-                        st.experimental_rerun()
                     if remover:
                         delete_asset_class(row["id"])
                         st.success(f"Classe {novo_nome} removida.")
-                        st.experimental_rerun()
             else:
                 st.info("Nenhuma classe de ativo cadastrada.")
             st.write("### Adicionar Nova Classe de Ativo")
@@ -309,9 +303,8 @@ def main():
                     if nova_classe:
                         add_asset_class(username, nova_classe, novo_valor_alvo)
                         st.success("Classe adicionada com sucesso!")
-                        st.experimental_rerun()
 
-        # Seção Simulação (não modificada)
+        # Seção Simulação
         elif menu_opcao == "Simulação":
             st.subheader("Simulação de Aporte e Rebalanceamento")
             portfolio = get_portfolio(username)
@@ -348,7 +341,7 @@ def main():
             else:
                 st.info("Nenhum ativo cadastrado para simulação.")
 
-        # Seção Cotações com busca e favoritos atualizados
+        # Seção Cotações – Busca e Favoritos
         elif menu_opcao == "Cotações":
             st.subheader("Consulta de Ativos, Ações e FIIs da B3")
             
@@ -366,22 +359,22 @@ def main():
                         price = info.get("regularMarketPrice", None)
                         shortName = info.get("shortName", ticker)
                         st.write(f"**{shortName} ({ticker})** - Cotação Atual: R$ {price:.2f}")
-                        # Armazena temporariamente o ativo pesquisado
+                        # Armazena temporariamente o ativo pesquisado em session_state
                         st.session_state["searched_asset"] = {"ticker": ticker, "shortName": shortName, "price": price}
                     else:
                         st.error("Ativo não encontrado. Verifique o ticker ou nome da empresa/fundo.")
             
-            # Se houver um ativo pesquisado, exibe os detalhes e o botão de favoritar
+            # Exibe o ativo pesquisado, se existir, com botão para favoritar
             if "searched_asset" in st.session_state:
                 asset = st.session_state["searched_asset"]
                 st.write(f"**{asset['shortName']} ({asset['ticker']})** - Cotação Atual: R$ {asset['price']:.2f}")
                 if st.button("Favoritar Este Ativo", key="favorite_button"):
                     add_favorite(username, asset["ticker"], asset["shortName"])
                     st.success(f"{asset['shortName']} adicionado aos favoritos!")
-                    del st.session_state["searched_asset"]
-                    st.experimental_rerun()
+                    # Remove o ativo pesquisado da sessão para limpar a busca
+                    st.session_state.pop("searched_asset")
             
-            # Auto-refresh dos favoritos a cada 30 segundos para atualizar as cotações
+            # Auto-refresh dos favoritos (a cada 30 segundos)
             st_autorefresh(interval=30000, key="fav_autorefresh")
             
             st.write("### Favoritos")
@@ -399,13 +392,12 @@ def main():
                         if col3.button("Remover", key=f"rem_fav_{fav['id']}"):
                             delete_favorite(fav["id"])
                             st.success(f"{shortName} removido dos favoritos.")
-                            st.experimental_rerun()
                     else:
                         st.write(f"Não foi possível obter a cotação para {ticker}.")
             else:
                 st.info("Nenhum ativo favoritado.")
                         
-        # Seção Exportar Dados (não modificada)
+        # Seção Exportar Dados
         elif menu_opcao == "Exportar Dados":
             st.subheader("Exportar sua Carteira")
             portfolio = get_portfolio(username)
@@ -416,12 +408,12 @@ def main():
             else:
                 st.info("Nenhum dado para exportar.")
 
-        st.sidebar.button("Sair", on_click=logout)
-
-def logout():
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.experimental_rerun()
+        # Botão de Logout na barra lateral
+        if st.sidebar.button("Sair"):
+            st.session_state.logged_in = False
+            st.session_state.pop("searched_asset", None)
+            st.experimental_set_query_params()  # Limpa possíveis parâmetros
+            st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
