@@ -10,7 +10,7 @@ from streamlit_autorefresh import st_autorefresh
 # ---------------- CONFIGURAÇÃO ------------------
 DB_PATH = "investments.db"
 
-# Função que sempre retorna uma nova conexão com o banco, garantindo que as operações sejam efetivadas
+# Sempre retorna uma nova conexão para garantir que as operações sejam efetivadas
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -20,7 +20,6 @@ def get_db_connection():
 def create_tables():
     conn = get_db_connection()
     with conn:
-        # Tabela de usuários com senha hasheada
         conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +27,6 @@ def create_tables():
                 password_hash TEXT NOT NULL
             )
         ''')
-        # Tabela de ativos (portfolio) com coluna asset_class
         conn.execute('''
             CREATE TABLE IF NOT EXISTS portfolio (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +37,6 @@ def create_tables():
                 current_value REAL NOT NULL
             )
         ''')
-        # Tabela para gerenciar as classes de ativos
         conn.execute('''
             CREATE TABLE IF NOT EXISTS asset_classes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,7 +45,6 @@ def create_tables():
                 target_value REAL NOT NULL DEFAULT 0.0
             )
         ''')
-        # Tabela para armazenar os ativos favoritados
         conn.execute('''
             CREATE TABLE IF NOT EXISTS favorites (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +54,6 @@ def create_tables():
             )
         ''')
 
-# Executa a criação das tabelas
 create_tables()
 
 # ---------------- FUNÇÕES DE USUÁRIO ------------------
@@ -190,6 +185,7 @@ def main():
     st.set_page_config(page_title="Investimentos", layout="wide")
     st.sidebar.title("Navegação")
 
+    # Verifica estado de login
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
 
@@ -226,6 +222,7 @@ def main():
         menu_opcao = st.sidebar.radio("Escolha uma ação", 
                                       ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Cotações", "Exportar Dados"])
         
+        # Seção Carteira (não modificada)
         if menu_opcao == "Carteira":
             st.subheader("Sua Carteira")
             portfolio = get_portfolio(username)
@@ -252,6 +249,7 @@ def main():
             else:
                 st.info("Nenhum ativo cadastrado.")
 
+        # Seção Nova Ação (não modificada)
         elif menu_opcao == "Nova Ação":
             st.subheader("Adicionar Novo Ativo")
             classes = get_asset_classes(username)
@@ -280,6 +278,7 @@ def main():
                     st.success("Ativo adicionado com sucesso!")
                     st.experimental_rerun()
 
+        # Seção Classes de Ativos (não modificada)
         elif menu_opcao == "Classes de Ativos":
             st.subheader("Gerencie suas Classes de Ativos")
             classes = get_asset_classes(username)
@@ -312,6 +311,7 @@ def main():
                         st.success("Classe adicionada com sucesso!")
                         st.experimental_rerun()
 
+        # Seção Simulação (não modificada)
         elif menu_opcao == "Simulação":
             st.subheader("Simulação de Aporte e Rebalanceamento")
             portfolio = get_portfolio(username)
@@ -348,10 +348,11 @@ def main():
             else:
                 st.info("Nenhum ativo cadastrado para simulação.")
 
+        # Seção Cotações com busca e favoritos atualizados
         elif menu_opcao == "Cotações":
             st.subheader("Consulta de Ativos, Ações e FIIs da B3")
             
-            # Campo de busca e opção para pesquisar na B3
+            # Campo de busca e checkbox para forçar ativos da B3
             search_query = st.text_input("Digite o ticker ou nome da empresa/fundo")
             usar_B3 = st.checkbox("Pesquisar na B3 (.SA automaticamente)", value=True)
             
@@ -365,14 +366,22 @@ def main():
                         price = info.get("regularMarketPrice", None)
                         shortName = info.get("shortName", ticker)
                         st.write(f"**{shortName} ({ticker})** - Cotação Atual: R$ {price:.2f}")
-                        if st.button("Favoritar Este Ativo", key=f"fav_add_{ticker}"):
-                            add_favorite(username, ticker, shortName)
-                            st.success(f"{shortName} adicionado aos favoritos!")
-                            st.experimental_rerun()
+                        # Armazena temporariamente o ativo pesquisado
+                        st.session_state["searched_asset"] = {"ticker": ticker, "shortName": shortName, "price": price}
                     else:
                         st.error("Ativo não encontrado. Verifique o ticker ou nome da empresa/fundo.")
             
-            # Atualiza os favoritos automaticamente a cada 30 segundos
+            # Se houver um ativo pesquisado, exibe os detalhes e o botão de favoritar
+            if "searched_asset" in st.session_state:
+                asset = st.session_state["searched_asset"]
+                st.write(f"**{asset['shortName']} ({asset['ticker']})** - Cotação Atual: R$ {asset['price']:.2f}")
+                if st.button("Favoritar Este Ativo", key="favorite_button"):
+                    add_favorite(username, asset["ticker"], asset["shortName"])
+                    st.success(f"{asset['shortName']} adicionado aos favoritos!")
+                    del st.session_state["searched_asset"]
+                    st.experimental_rerun()
+            
+            # Auto-refresh dos favoritos a cada 30 segundos para atualizar as cotações
             st_autorefresh(interval=30000, key="fav_autorefresh")
             
             st.write("### Favoritos")
@@ -396,6 +405,7 @@ def main():
             else:
                 st.info("Nenhum ativo favoritado.")
                         
+        # Seção Exportar Dados (não modificada)
         elif menu_opcao == "Exportar Dados":
             st.subheader("Exportar sua Carteira")
             portfolio = get_portfolio(username)
