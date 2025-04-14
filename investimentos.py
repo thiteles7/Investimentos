@@ -322,7 +322,7 @@ def main():
                             st.success(f"Cotação atual de {novo_ticker.upper()}: R$ {cotacao_atual:.2f}")
                         else:
                             st.error("Ticker inválido ou cotação não encontrada.")
-                # Adicionar ativo
+                # Adicionar ativo manualmente
                 if st.form_submit_button("Adicionar Ativo Manualmente"):
                     if cotacao_atual is None:
                         valor_atual = st.number_input("Valor Atual", min_value=0.0, step=0.01)
@@ -339,37 +339,50 @@ def main():
             
             # Upload de Planilha
             st.write("#### Upload de Planilha para Adição de Ativos")
-            st.info("A planilha deve ter 4 colunas (com ou sem cabeçalho): 'Ticker', 'Valor Aplicado', 'Saldo Bruto' e 'Classe do Ativo'. Você pode carregar arquivos CSV ou Excel (XLS/XLSX).")
+            st.info("A planilha deve ter 4 colunas (de A a D): 'Ticker', 'Valor Aplicado', 'Saldo Bruto' e 'Classe do Ativo'. Você pode carregar arquivos CSV ou Excel (XLS/XLSX).")
+            has_header = st.checkbox("O arquivo possui cabeçalho?", value=True, key="header_check")
             uploaded_file = st.file_uploader("Faça upload do arquivo", type=["csv", "xlsx", "xls"])
             if uploaded_file is not None:
                 try:
-                    # Se for CSV, usa tentativa para detectar delimitador automaticamente
+                    # Se for CSV, usa a opção de cabeçalho conforme o checkbox
                     if uploaded_file.name.endswith(".csv"):
-                        df = pd.read_csv(uploaded_file, sep=None, engine="python")
-                    # Se for Excel, usa o engine "openpyxl" para XLSX e "xlrd" para XLS
-                    elif uploaded_file.name.endswith((".xls", ".xlsx")):
-                        if uploaded_file.name.endswith(".xlsx"):
-                            df = pd.read_excel(uploaded_file, engine="openpyxl")
+                        if has_header:
+                            df = pd.read_csv(uploaded_file)
                         else:
-                            df = pd.read_excel(uploaded_file, engine="xlrd")
+                            df = pd.read_csv(uploaded_file, header=None)
+                    # Se for Excel, usa o engine "openpyxl" para XLSX e "xlrd" para XLS, considerando o cabeçalho
+                    elif uploaded_file.name.endswith((".xls", ".xlsx")):
+                        if has_header:
+                            if uploaded_file.name.endswith(".xlsx"):
+                                df = pd.read_excel(uploaded_file, engine="openpyxl")
+                            else:
+                                df = pd.read_excel(uploaded_file, engine="xlrd")
+                        else:
+                            if uploaded_file.name.endswith(".xlsx"):
+                                df = pd.read_excel(uploaded_file, engine="openpyxl", header=None)
+                            else:
+                                df = pd.read_excel(uploaded_file, engine="xlrd", header=None)
                     st.write("Visualização dos dados carregados:")
                     st.dataframe(df.head())
                     
-                    # Itera em cada linha considerando as 4 colunas
+                    # Se o arquivo possui cabeçalho, usamos os dados a partir da primeira linha de dados
+                    start_idx = 0
+                    if has_header:
+                        # Opcional: você pode pular a primeira linha se preferir ignorar os nomes
+                        pass
+                    
+                    # Itera em cada linha usando a ordem das colunas: A: ticker, B: valor aplicado, C: saldo bruto, D: classe
                     for index, row in df.iterrows():
-                        ticker = str(row[0]).strip().upper()
                         try:
-                            valor_aplicado = float(row[1])
+                            # Use row.iloc para pegar as colunas pela posição, independente do nome
+                            ticker = str(row.iloc[0]).strip().upper()
+                            valor_aplicado = float(row.iloc[1])
+                            saldo_bruto = float(row.iloc[2])
+                            asset_class = str(row.iloc[3]).strip()
                         except Exception as e:
-                            st.error(f"Erro na conversão do valor aplicado para o ticker {ticker}: {e}")
+                            st.error(f"Erro ao processar a linha {index}: {e}")
                             continue
-                        try:
-                            saldo_bruto = float(row[2])
-                        except Exception as e:
-                            st.error(f"Erro na conversão do saldo bruto para o ticker {ticker}: {e}")
-                            continue
-                        asset_class = str(row[3]).strip()
-                        # Utiliza o "Saldo Bruto" como o valor atual do ativo
+                        # Aqui usamos o "saldo_bruto" como o valor atual do ativo
                         current_value = saldo_bruto
                         add_asset(username, ticker, asset_class, 0.0, current_value)
                     st.success("Ativos adicionados via upload com sucesso!")
