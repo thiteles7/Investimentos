@@ -37,7 +37,6 @@ def create_tables():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL,
                 asset_name TEXT NOT NULL,
-                asset_class TEXT,
                 target_percent REAL NOT NULL,
                 current_value REAL NOT NULL
             )
@@ -67,7 +66,22 @@ def create_tables():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+    conn.close()
+
+# Função para garantir que a tabela portfolio possua as colunas necessárias
+def ensure_portfolio_table():
+    conn = get_db_connection()
+    cur = conn.execute("PRAGMA table_info(portfolio)")
+    columns = [row["name"] for row in cur.fetchall()]
+    # Se a coluna asset_class não existir, adiciona-a
+    if "asset_class" not in columns:
+        with conn:
+            conn.execute("ALTER TABLE portfolio ADD COLUMN asset_class TEXT")
+    conn.close()
+
+# Cria as tabelas (se não existirem) e garante que a tabela portfolio esteja atualizada
 create_tables()
+ensure_portfolio_table()
 
 # Função para registrar logs de atividade
 def log_event(username: str, event_type: str, details: str = ""):
@@ -77,12 +91,15 @@ def log_event(username: str, event_type: str, details: str = ""):
             "INSERT INTO user_logs (username, event_type, details) VALUES (?, ?, ?)",
             (username, event_type, details)
         )
+    conn.close()
 
 # ---------------- FUNÇÕES DE USUÁRIO ------------------
 def get_user(username: str):
     conn = get_db_connection()
     cur = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
-    return cur.fetchone()
+    result = cur.fetchone()
+    conn.close()
+    return result
 
 def create_user(username: str, password: str):
     conn = get_db_connection()
@@ -94,6 +111,8 @@ def create_user(username: str, password: str):
         return True
     except sqlite3.IntegrityError:
         return False
+    finally:
+        conn.close()
 
 def verify_user(username: str, password: str):
     user = get_user(username)
@@ -109,7 +128,9 @@ def verify_user(username: str, password: str):
 def get_portfolio(username: str):
     conn = get_db_connection()
     cur = conn.execute("SELECT * FROM portfolio WHERE username = ?", (username,))
-    return cur.fetchall()
+    results = cur.fetchall()
+    conn.close()
+    return results
 
 def add_asset(username: str, asset_name: str, asset_class: str, target_percent: float, current_value: float):
     conn = get_db_connection()
@@ -119,6 +140,7 @@ def add_asset(username: str, asset_name: str, asset_class: str, target_percent: 
             (username, asset_name.upper(), asset_class, target_percent, current_value)
         )
     log_event(username, "Adição de ativo", f"Ativo {asset_name.upper()} adicionado.")
+    conn.close()
 
 def update_asset(asset_id: int, asset_name: str, asset_class: str, target_percent: float, current_value: float, username: str):
     conn = get_db_connection()
@@ -128,18 +150,22 @@ def update_asset(asset_id: int, asset_name: str, asset_class: str, target_percen
             (asset_name.upper(), asset_class, target_percent, current_value, asset_id)
         )
     log_event(username, "Atualização de ativo", f"Ativo {asset_name.upper()} atualizado.")
+    conn.close()
 
 def delete_asset(asset_id: int, username: str, asset_name: str):
     conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM portfolio WHERE id = ?", (asset_id,))
     log_event(username, "Exclusão de ativo", f"Ativo {asset_name} removido.")
+    conn.close()
 
 # ---------------- FUNÇÕES DE CLASSES DE ATIVOS ------------------
 def get_asset_classes(username: str):
     conn = get_db_connection()
     cur = conn.execute("SELECT * FROM asset_classes WHERE username = ?", (username,))
-    return cur.fetchall()
+    results = cur.fetchall()
+    conn.close()
+    return results
 
 def add_asset_class(username: str, class_name: str, target_value: float):
     conn = get_db_connection()
@@ -149,6 +175,7 @@ def add_asset_class(username: str, class_name: str, target_value: float):
             (username, class_name, target_value)
         )
     log_event(username, "Adição de classe de ativo", f"Classe {class_name} adicionada.")
+    conn.close()
 
 def update_asset_class(class_id: int, class_name: str, target_value: float, username: str):
     conn = get_db_connection()
@@ -158,18 +185,22 @@ def update_asset_class(class_id: int, class_name: str, target_value: float, user
             (class_name, target_value, class_id)
         )
     log_event(username, "Atualização de classe", f"Classe {class_name} atualizada.")
+    conn.close()
 
 def delete_asset_class(class_id: int, username: str, class_name: str):
     conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM asset_classes WHERE id = ?", (class_id,))
     log_event(username, "Exclusão de classe", f"Classe {class_name} removida.")
+    conn.close()
 
 # ---------------- FUNÇÕES DE FAVORITOS ------------------
 def get_favorites(username: str):
     conn = get_db_connection()
     cur = conn.execute("SELECT * FROM favorites WHERE username = ?", (username,))
-    return cur.fetchall()
+    results = cur.fetchall()
+    conn.close()
+    return results
 
 def add_favorite(username: str, ticker: str, company_name: str):
     conn = get_db_connection()
@@ -179,12 +210,14 @@ def add_favorite(username: str, ticker: str, company_name: str):
             (username, ticker.upper(), company_name)
         )
     log_event(username, "Adição de favorito", f"Ticker {ticker.upper()} adicionado aos favoritos.")
+    conn.close()
 
 def delete_favorite(fav_id: int, username: str, ticker: str):
     conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM favorites WHERE id = ?", (fav_id,))
     log_event(username, "Exclusão de favorito", f"Ticker {ticker} removido dos favoritos.")
+    conn.close()
 
 # ---------------- FUNÇÕES FINANCEIRAS ------------------
 def fetch_stock_price(ticker: str):
@@ -350,7 +383,7 @@ def main():
                             df = pd.read_csv(uploaded_file)
                         else:
                             df = pd.read_csv(uploaded_file, header=None)
-                    # Se for Excel, usa o engine "openpyxl" para XLSX e "xlrd" para XLS, considerando o cabeçalho
+                    # Se for Excel, usa o engine apropriado, considerando o cabeçalho
                     elif uploaded_file.name.endswith((".xls", ".xlsx")):
                         if has_header:
                             if uploaded_file.name.endswith(".xlsx"):
@@ -365,16 +398,9 @@ def main():
                     st.write("Visualização dos dados carregados:")
                     st.dataframe(df.head())
                     
-                    # Se o arquivo possui cabeçalho, usamos os dados a partir da primeira linha de dados
-                    start_idx = 0
-                    if has_header:
-                        # Opcional: você pode pular a primeira linha se preferir ignorar os nomes
-                        pass
-                    
                     # Itera em cada linha usando a ordem das colunas: A: ticker, B: valor aplicado, C: saldo bruto, D: classe
                     for index, row in df.iterrows():
                         try:
-                            # Use row.iloc para pegar as colunas pela posição, independente do nome
                             ticker = str(row.iloc[0]).strip().upper()
                             valor_aplicado = float(row.iloc[1])
                             saldo_bruto = float(row.iloc[2])
@@ -382,7 +408,7 @@ def main():
                         except Exception as e:
                             st.error(f"Erro ao processar a linha {index}: {e}")
                             continue
-                        # Aqui usamos o "saldo_bruto" como o valor atual do ativo
+                        # Usa o "Saldo Bruto" como o valor atual do ativo
                         current_value = saldo_bruto
                         add_asset(username, ticker, asset_class, 0.0, current_value)
                     st.success("Ativos adicionados via upload com sucesso!")
