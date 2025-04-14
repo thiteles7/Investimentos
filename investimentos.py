@@ -339,7 +339,7 @@ def main():
             
             # Upload de Planilha
             st.write("#### Upload de Planilha para Adição de Ativos")
-            st.info("A planilha deve ter 3 colunas (com ou sem cabeçalho): 'Ticker', 'Quantidade' e 'Classe de Ativo'.")
+            st.info("A planilha deve ter 4 colunas (com ou sem cabeçalho): 'Ticker', 'Valor Aplicado', 'Saldo Bruto' e 'Classe do Ativo'.")
             uploaded_file = st.file_uploader("Faça upload do arquivo CSV", type=["csv"])
             if uploaded_file is not None:
                 try:
@@ -347,20 +347,22 @@ def main():
                     st.write("Visualização dos dados carregados:")
                     st.dataframe(df.head())
                     
+                    # Itera em cada linha considerando as 4 colunas
                     for index, row in df.iterrows():
                         ticker = str(row[0]).strip().upper()
                         try:
-                            quantity = float(row[1])
+                            valor_aplicado = float(row[1])
                         except Exception as e:
-                            st.error(f"Erro na conversão da quantidade para o ticker {ticker}: {e}")
+                            st.error(f"Erro na conversão do valor aplicado para o ticker {ticker}: {e}")
                             continue
-                        asset_class = str(row[2]).strip()
-                        price = fetch_stock_price(ticker)
-                        if price is not None:
-                            current_value = price * quantity
-                        else:
-                            st.warning(f"Cotação não encontrada para {ticker}. Valor definido como 0.")
-                            current_value = 0.0
+                        try:
+                            saldo_bruto = float(row[2])
+                        except Exception as e:
+                            st.error(f"Erro na conversão do saldo bruto para o ticker {ticker}: {e}")
+                            continue
+                        asset_class = str(row[3]).strip()
+                        # Usa o saldo_bruto como o valor atual do ativo
+                        current_value = saldo_bruto
                         add_asset(username, ticker, asset_class, 0.0, current_value)
                     st.success("Ativos adicionados via upload com sucesso!")
                     safe_rerun()
