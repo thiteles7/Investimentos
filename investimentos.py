@@ -343,10 +343,15 @@ def main():
             uploaded_file = st.file_uploader("Faça upload do arquivo", type=["csv", "xlsx", "xls"])
             if uploaded_file is not None:
                 try:
+                    # Se for CSV, usa tentativa para detectar delimitador automaticamente
                     if uploaded_file.name.endswith(".csv"):
                         df = pd.read_csv(uploaded_file, sep=None, engine="python")
+                    # Se for Excel, usa o engine "openpyxl" para XLSX e "xlrd" para XLS
                     elif uploaded_file.name.endswith((".xls", ".xlsx")):
-                        df = pd.read_excel(uploaded_file)
+                        if uploaded_file.name.endswith(".xlsx"):
+                            df = pd.read_excel(uploaded_file, engine="openpyxl")
+                        else:
+                            df = pd.read_excel(uploaded_file, engine="xlrd")
                     st.write("Visualização dos dados carregados:")
                     st.dataframe(df.head())
                     
