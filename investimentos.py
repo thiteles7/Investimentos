@@ -339,11 +339,14 @@ def main():
             
             # Upload de Planilha
             st.write("#### Upload de Planilha para Adição de Ativos")
-            st.info("A planilha deve ter 4 colunas (com ou sem cabeçalho): 'Ticker', 'Valor Aplicado', 'Saldo Bruto' e 'Classe do Ativo'.")
-            uploaded_file = st.file_uploader("Faça upload do arquivo CSV", type=["csv"])
+            st.info("A planilha deve ter 4 colunas (com ou sem cabeçalho): 'Ticker', 'Valor Aplicado', 'Saldo Bruto' e 'Classe do Ativo'. Você pode carregar arquivos CSV ou Excel (XLS/XLSX).")
+            uploaded_file = st.file_uploader("Faça upload do arquivo", type=["csv", "xlsx", "xls"])
             if uploaded_file is not None:
                 try:
-                    df = pd.read_csv(uploaded_file)
+                    if uploaded_file.name.endswith(".csv"):
+                        df = pd.read_csv(uploaded_file, sep=None, engine="python")
+                    elif uploaded_file.name.endswith((".xls", ".xlsx")):
+                        df = pd.read_excel(uploaded_file)
                     st.write("Visualização dos dados carregados:")
                     st.dataframe(df.head())
                     
@@ -361,7 +364,7 @@ def main():
                             st.error(f"Erro na conversão do saldo bruto para o ticker {ticker}: {e}")
                             continue
                         asset_class = str(row[3]).strip()
-                        # Usa o saldo_bruto como o valor atual do ativo
+                        # Utiliza o "Saldo Bruto" como o valor atual do ativo
                         current_value = saldo_bruto
                         add_asset(username, ticker, asset_class, 0.0, current_value)
                     st.success("Ativos adicionados via upload com sucesso!")
