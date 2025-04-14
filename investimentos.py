@@ -10,21 +10,22 @@ from streamlit_autorefresh import st_autorefresh
 # ---------------- CONFIGURAÇÃO ------------------
 DB_PATH = "investments.db"
 
-# Retorna uma nova conexão com o banco para cada operação
+# ---------------- BANCO DE DADOS e Tabelas ------------------
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-# Criação das tabelas necessárias (usuários, carteira, classes e favoritos)
 def create_tables():
     conn = get_db_connection()
     with conn:
+        # Tabela de usuários agora possui a coluna 'role' com padrão 'user'
         conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user'
             )
         ''')
         conn.execute('''
@@ -62,12 +63,12 @@ def get_user(username: str):
     cur = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
     return cur.fetchone()
 
-def create_user(username: str, password: str):
+def create_user(username: str, password: str, role="user"):
     conn = get_db_connection()
     pw_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
         with conn:
-            conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, pw_hash))
+            conn.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", (username, pw_hash, role))
         return True
     except sqlite3.IntegrityError:
         return False
@@ -78,6 +79,17 @@ def verify_user(username: str, password: str):
         stored_hash = user["password_hash"].encode('utf-8')
         return bcrypt.checkpw(password.encode('utf-8'), stored_hash)
     return False
+
+# ---------------- FUNÇÕES DE ADMIN ------------------
+def get_all_users():
+    conn = get_db_connection()
+    cur = conn.execute("SELECT * FROM users")
+    return cur.fetchall()
+
+def update_user_role(user_id: int, role: str):
+    conn = get_db_connection()
+    with conn:
+        conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
 
 # ---------------- FUNÇÕES DE CARTEIRA ------------------
 def get_portfolio(username: str):
@@ -185,10 +197,10 @@ def main():
     st.set_page_config(page_title="Investimentos", layout="wide")
     st.sidebar.title("Navegação")
     
+    # Login tradicional com usuário/senha
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
 
-    # Tela de login e criação de usuário
     if not st.session_state.logged_in:
         menu = st.sidebar.selectbox("Menu", ["Login", "Criar Novo Usuário"])
         if menu == "Login":
@@ -206,6 +218,7 @@ def main():
             st.title("📋 Criar Novo Usuário")
             new_username = st.text_input("Novo nome de usuário", key="new_username")
             new_password = st.text_input("Nova senha", type="password", key="new_password")
+            # Usuário criado via cadastro tradicional recebe papel padrão "user"
             if st.button("Criar Usuário"):
                 if new_username and new_password:
                     if create_user(new_username, new_password):
@@ -216,13 +229,19 @@ def main():
                     st.warning("Preencha todos os campos.")
     else:
         username = st.session_state.username
+        user = get_user(username)
+        
+        # Define as opções de menu; se o usuário for admin, inclui a opção "Admin"
+        if user and user["role"] == "admin":
+            menu_options = ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Cotações", "Exportar Dados", "Admin"]
+        else:
+            menu_options = ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Cotações", "Exportar Dados"]
+        
         st.title("💰 App de Investimentos - Dashboard")
-        st.sidebar.write(f"Usuário: {username}")
+        st.sidebar.write(f"Usuário: {username} (Role: {user['role'] if user else 'N/A'})")
+        menu_opcao = st.sidebar.radio("Escolha uma ação", menu_options)
         
-        menu_opcao = st.sidebar.radio("Escolha uma ação",
-                                      ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Cotações", "Exportar Dados"])
-        
-        # CARTEIRA
+        # --- CARTEIRA ---
         if menu_opcao == "Carteira":
             st.subheader("Sua Carteira")
             portfolio = get_portfolio(username)
@@ -247,11 +266,11 @@ def main():
             else:
                 st.info("Nenhum ativo cadastrado.")
         
-        # NOVA AÇÃO – Cadastro Manual e Upload de Planilha
+        # --- NOVA AÇÃO – Cadastro Manual e Upload de Planilha ---
         elif menu_opcao == "Nova Ação":
             st.subheader("Adicionar Novo Ativo")
             
-            # --- Cadastro Manual ---
+            # Cadastro Manual
             st.write("#### Cadastro Manual")
             classes = get_asset_classes(username)
             classes_list = [cl["class_name"] for cl in classes] if classes else []
@@ -280,20 +299,17 @@ def main():
             
             st.markdown("---")
             
-            # --- Upload de Planilha ---
+            # Upload de Planilha
             st.write("#### Upload de Planilha para Adição de Ativos")
             st.info("A planilha deve ter 3 colunas (com ou sem cabeçalho): 'Ticker', 'Quantidade' e 'Classe de Ativo'.")
             uploaded_file = st.file_uploader("Faça upload do arquivo CSV", type=["csv"])
             if uploaded_file is not None:
                 try:
-                    # Tenta ler o CSV; se não houver cabeçalho, ajuste conforme necessário
                     df = pd.read_csv(uploaded_file)
                     st.write("Visualização dos dados carregados:")
                     st.dataframe(df.head())
                     
-                    # Itera em cada linha para adicionar os ativos
                     for index, row in df.iterrows():
-                        # Obtém os valores considerando que as três primeiras colunas são as desejadas
                         ticker = str(row[0]).strip().upper()
                         try:
                             quantity = float(row[1])
@@ -302,7 +318,6 @@ def main():
                             continue
                         asset_class = str(row[2]).strip()
                         
-                        # Busca a cotação do ativo e calcula o valor investido
                         price = fetch_stock_price(ticker)
                         if price is not None:
                             current_value = price * quantity
@@ -310,14 +325,14 @@ def main():
                             st.warning(f"Cotação não encontrada para {ticker}. Valor definido como 0.")
                             current_value = 0.0
                         
-                        # target_percent é definido como 0.0; pode ser ajustado posteriormente
+                        # target_percent é definido como 0.0; pode ser ajustado manualmente depois
                         add_asset(username, ticker, asset_class, 0.0, current_value)
                     
                     st.success("Ativos adicionados via upload com sucesso!")
                 except Exception as e:
                     st.error("Erro ao processar o arquivo: " + str(e))
         
-        # CLASSES DE ATIVOS
+        # --- CLASSES DE ATIVOS ---
         elif menu_opcao == "Classes de Ativos":
             st.subheader("Gerencie suas Classes de Ativos")
             classes = get_asset_classes(username)
@@ -347,7 +362,7 @@ def main():
                         add_asset_class(username, nova_classe, novo_valor_alvo)
                         st.success("Classe adicionada com sucesso!")
         
-        # SIMULAÇÃO
+        # --- SIMULAÇÃO ---
         elif menu_opcao == "Simulação":
             st.subheader("Simulação de Aporte e Rebalanceamento")
             portfolio = get_portfolio(username)
@@ -384,7 +399,7 @@ def main():
             else:
                 st.info("Nenhum ativo cadastrado para simulação.")
         
-        # COTAÇÕES – Busca e Favoritos
+        # --- COTAÇÕES – Busca e Favoritos ---
         elif menu_opcao == "Cotações":
             st.subheader("Consulta de Ativos, Ações e FIIs da B3")
             search_query = st.text_input("Digite o ticker ou nome da empresa/fundo")
@@ -433,7 +448,7 @@ def main():
             else:
                 st.info("Nenhum ativo favoritado.")
         
-        # EXPORTAR DADOS
+        # --- EXPORTAR DADOS ---
         elif menu_opcao == "Exportar Dados":
             st.subheader("Exportar sua Carteira")
             portfolio = get_portfolio(username)
@@ -444,7 +459,43 @@ def main():
             else:
                 st.info("Nenhum dado para exportar.")
         
-        # Botão de Logout
+        # --- ADMIN – Área Exclusiva para Usuários Admin ---
+        elif menu_opcao == "Admin":
+            st.subheader("Administração de Usuários")
+            users = get_all_users()
+            if users:
+                df_users = pd.DataFrame(users, columns=users[0].keys())
+                st.dataframe(df_users)
+                st.write("### Gerenciar Usuários")
+                for user in users:
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.write(f"ID: {user['id']} | Username: {user['username']}")
+                    new_role = col2.selectbox("Papel", options=["user", "admin"], index=0 if user["role"]=="user" else 1, key=f"role_{user['id']}")
+                    if col3.button("Atualizar Papel", key=f"update_role_{user['id']}"):
+                        update_user_role(user["id"], new_role)
+                        st.success(f"Papel do usuário {user['username']} atualizado para {new_role}.")
+                    if col4.button("Deletar", key=f"delete_user_{user['id']}"):
+                        if user["username"] == st.session_state["username"]:
+                            st.error("Não é possível deletar seu próprio usuário.")
+                        else:
+                            conn = get_db_connection()
+                            with conn:
+                                conn.execute("DELETE FROM users WHERE id = ?", (user["id"],))
+                            st.success(f"Usuário {user['username']} deletado.")
+            else:
+                st.info("Nenhum usuário encontrado.")
+            st.write("### Cadastrar Novo Usuário Admin")
+            with st.form("admin_create_user", clear_on_submit=True):
+                new_admin_username = st.text_input("Username", key="new_admin_username")
+                new_admin_password = st.text_input("Password", type="password", key="new_admin_password")
+                if st.form_submit_button("Criar Usuário Admin"):
+                    if new_admin_username and new_admin_password:
+                        if create_user(new_admin_username, new_admin_password, role="admin"):
+                            st.success(f"Usuário admin {new_admin_username} criado com sucesso!")
+                        else:
+                            st.error("Esse username já existe.")
+        
+        # --- BOTÃO DE LOGOUT ---
         if st.sidebar.button("Sair"):
             st.session_state.logged_in = False
             st.session_state.pop("searched_asset", None)
