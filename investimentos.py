@@ -10,6 +10,11 @@ from streamlit_autorefresh import st_autorefresh
 # ---------------- CONFIGURAÇÃO ------------------
 DB_PATH = "investments.db"
 
+# Função auxiliar para "rerun" seguro
+def safe_rerun():
+    if hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+
 # Retorna uma nova conexão com o banco para cada operação
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -230,7 +235,7 @@ def main():
                     st.session_state.logged_in = True
                     st.session_state.username = username
                     st.success(f"Bem-vindo, {username}!")
-                    st.experimental_rerun()
+                    safe_rerun()
                 else:
                     st.error("Nome de usuário ou senha incorretos.")
         else:
@@ -270,7 +275,6 @@ def main():
                 st.dataframe(df_port)
                 st.write("### Atualize ou Remova Ativos")
                 for _, row in df_port.iterrows():
-                    # Usando chave única para cada botão
                     col1, col2, col3, col4, col5, col6 = st.columns([2, 2, 2, 2, 2, 1])
                     novo_nome = col1.text_input("Ativo", value=row["asset_name"], key=f"nome_{row['id']}_{username}")
                     novo_classe = col2.text_input("Classe", value=row["asset_class"] if row["asset_class"] else "", key=f"classe_{row['id']}_{username}")
@@ -281,11 +285,11 @@ def main():
                     if atualizar:
                         update_asset(row["id"], novo_nome, novo_classe, novo_percent, novo_valor, username)
                         st.success(f"Ativo {novo_nome} atualizado.")
-                        st.experimental_rerun()
+                        safe_rerun()
                     if remover:
                         delete_asset(row["id"], username, row["asset_name"])
                         st.success(f"Ativo {row['asset_name']} removido.")
-                        st.experimental_rerun()
+                        safe_rerun()
                 
                 # Gráfico de pizza mostrando a distribuição dos ativos
                 fig_pie = px.pie(df_port, names="asset_name", values="current_value",
@@ -320,17 +324,16 @@ def main():
                             st.error("Ticker inválido ou cotação não encontrada.")
                 # Adicionar ativo
                 if st.form_submit_button("Adicionar Ativo Manualmente"):
-                    # Validação: se não foi possível buscar cotação, o usuário deve informar o valor manualmente
                     if cotacao_atual is None:
                         valor_atual = st.number_input("Valor Atual", min_value=0.0, step=0.01)
                     else:
                         valor_atual = cotacao_atual
-                    # Validação do ticker para garantir que é válido antes de adicionar
                     if fetch_stock_price(novo_ticker.upper()) is None:
                         st.error("Não foi possível validar o ticker. Verifique se está correto.")
                     else:
                         add_asset(username, novo_ticker, novo_classe, novo_percentual, valor_atual)
                         st.success("Ativo adicionado manualmente com sucesso!")
+                        safe_rerun()
             
             st.markdown("---")
             
@@ -352,7 +355,6 @@ def main():
                             st.error(f"Erro na conversão da quantidade para o ticker {ticker}: {e}")
                             continue
                         asset_class = str(row[2]).strip()
-                        # Busca a cotação; se não encontrada, o ativo recebe valor 0
                         price = fetch_stock_price(ticker)
                         if price is not None:
                             current_value = price * quantity
@@ -361,7 +363,7 @@ def main():
                             current_value = 0.0
                         add_asset(username, ticker, asset_class, 0.0, current_value)
                     st.success("Ativos adicionados via upload com sucesso!")
-                    st.experimental_rerun()
+                    safe_rerun()
                 except Exception as e:
                     st.error("Erro ao processar o arquivo: " + str(e))
         
@@ -381,11 +383,11 @@ def main():
                     if atualizar:
                         update_asset_class(row["id"], novo_nome, novo_target, username)
                         st.success(f"Classe {novo_nome} atualizada.")
-                        st.experimental_rerun()
+                        safe_rerun()
                     if remover:
                         delete_asset_class(row["id"], username, row["class_name"])
                         st.success(f"Classe {row['class_name']} removida.")
-                        st.experimental_rerun()
+                        safe_rerun()
             else:
                 st.info("Nenhuma classe de ativo cadastrada.")
             st.write("### Adicionar Nova Classe de Ativo")
@@ -396,7 +398,7 @@ def main():
                     if nova_classe:
                         add_asset_class(username, nova_classe, novo_valor_alvo)
                         st.success("Classe adicionada com sucesso!")
-                        st.experimental_rerun()
+                        safe_rerun()
         
         # ---------------- SIMULAÇÃO ----------------
         elif menu_opcao == "Simulação":
@@ -462,7 +464,7 @@ def main():
                     add_favorite(username, asset["ticker"], asset["shortName"])
                     st.success(f"{asset['shortName']} adicionado aos favoritos!")
                     st.session_state.pop("searched_asset")
-                    st.experimental_rerun()
+                    safe_rerun()
             
             st_autorefresh(interval=30000, key="fav_autorefresh")
             st.write("### Favoritos")
@@ -480,7 +482,7 @@ def main():
                         if col3.button("Remover", key=f"rem_fav_{fav['id']}_{username}"):
                             delete_favorite(fav["id"], username, ticker)
                             st.success(f"{shortName} removido dos favoritos.")
-                            st.experimental_rerun()
+                            safe_rerun()
                     else:
                         st.write(f"Não foi possível obter a cotação para {ticker}.")
             else:
@@ -502,7 +504,7 @@ def main():
             st.session_state.logged_in = False
             st.session_state.pop("searched_asset", None)
             st.experimental_set_query_params()  # Limpa parâmetros de consulta, se houver
-            st.experimental_rerun()
+            safe_rerun()
 
 if __name__ == "__main__":
     main()
