@@ -5,7 +5,9 @@ import yfinance as yf
 import plotly.express as px
 import pandas as pd
 import os
+from fpdf import FPDF
 from streamlit_autorefresh import st_autorefresh
+from datetime import datetime, timedelta
 
 # ---------------- CONFIGURAÇÃO ------------------
 DB_PATH = "investments.db"
@@ -21,7 +23,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Criação das tabelas necessárias (usuários, carteira, classes, favoritos e logs de atividades)
+# Criação das tabelas necessárias
 def create_tables():
     conn = get_db_connection()
     with conn:
@@ -32,6 +34,7 @@ def create_tables():
                 password_hash TEXT NOT NULL
             )
         ''')
+        # Tabela portfolio sem asset_class inicialmente
         conn.execute('''
             CREATE TABLE IF NOT EXISTS portfolio (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,22 +71,21 @@ def create_tables():
         ''')
     conn.close()
 
-# Função para garantir que a tabela portfolio possua as colunas necessárias
+# Garante que a tabela portfolio possua a coluna asset_class
 def ensure_portfolio_table():
     conn = get_db_connection()
     cur = conn.execute("PRAGMA table_info(portfolio)")
     columns = [row["name"] for row in cur.fetchall()]
-    # Se a coluna asset_class não existir, adiciona-a
     if "asset_class" not in columns:
         with conn:
             conn.execute("ALTER TABLE portfolio ADD COLUMN asset_class TEXT")
     conn.close()
 
-# Cria as tabelas (se não existirem) e garante que a tabela portfolio esteja atualizada
+# Cria as tabelas e ajusta a estrutura
 create_tables()
 ensure_portfolio_table()
 
-# Função para registrar logs de atividade
+# ---------------- FUNÇÕES DE LOG ------------------
 def log_event(username: str, event_type: str, details: str = ""):
     conn = get_db_connection()
     with conn:
@@ -247,16 +249,156 @@ def simulate_rebalance_assets(portfolio_df: pd.DataFrame, extra_amount: float):
     portfolio_df["aporte_ideal"] = portfolio_df["ideal_value"] - portfolio_df["current_value"]
     return portfolio_df, total_current, total_new
 
-# ---------------- INTERFACE DO STREAMLIT ------------------
+# ---------------- NOVAS FUNCIONALIDADES: HISTÓRICO DE PREÇOS E ALERTAS ----------------
+
+def historico_precos_page(username: str):
+    st.subheader("Histórico de Preços")
+    # Permite escolher um ticker ou selecionar a partir da carteira
+    portfolio = get_portfolio(username)
+    tickers = list({row["asset_name"] for row in portfolio}) if portfolio else []
+    ticker_choice = st.selectbox("Selecione um ticker:", options=[""] + tickers)
+    ticker_input = st.text_input("Ou insira um ticker:", value=ticker_choice)
+    
+    period_options = {
+        "1 mês": "1mo",
+        "3 meses": "3mo",
+        "6 meses": "6mo",
+        "1 ano": "1y",
+        "5 anos": "5y",
+        "Máximo": "max"
+    }
+    selected_period = st.selectbox("Selecione o período:", options=list(period_options.keys()))
+    
+    if ticker_input:
+        ticker = ticker_input.strip().upper()
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period=period_options[selected_period])
+            if hist.empty:
+                st.error("Nenhum dado histórico encontrado.")
+            else:
+                st.line_chart(hist["Close"])
+                st.write(hist.tail())
+        except Exception as e:
+            st.error(f"Erro ao buscar dados históricos: {e}")
+
+def alertas_page(username: str):
+    st.subheader("Alertas de Preço")
+    ticker = st.text_input("Ticker para monitorar:", value="")
+    condition = st.selectbox("Condição:", options=["Abaixo de", "Acima de"])
+    threshold = st.number_input("Valor de Alerta (R$):", min_value=0.0, step=0.01)
+    if st.button("Checar Alerta"):
+        if ticker:
+            ticker = ticker.strip().upper()
+            current_price = fetch_stock_price(ticker)
+            if current_price is None:
+                st.error("Não foi possível obter a cotação atual.")
+            else:
+                st.write(f"Cotação atual de {ticker}: R$ {current_price:.2f}")
+                if condition == "Abaixo de" and current_price < threshold:
+                    st.error(f"Alerta: {ticker} está abaixo de R$ {threshold:.2f}!")
+                elif condition == "Acima de" and current_price > threshold:
+                    st.error(f"Alerta: {ticker} está acima de R$ {threshold:.2f}!")
+                else:
+                    st.success("Nenhum alerta no momento.")
+        else:
+            st.warning("Insira um ticker para monitorar.")
+
+# ---------------- PÁGINAS EXISTENTES (Dashboard, Relatórios, Histórico de Logs, Notícias) ----------------
+
+def dashboard_page(username: str):
+    st.subheader("Dashboard")
+    portfolio = get_portfolio(username)
+    if not portfolio:
+        st.info("Nenhum ativo cadastrado para análise.")
+        return
+    df_port = pd.DataFrame(portfolio, columns=portfolio[0].keys())
+    total_value = df_port["current_value"].sum()
+    st.metric(label="Valor Total da Carteira", value=f"R$ {total_value:,.2f}")
+    if "asset_class" in df_port.columns:
+        fig_pie = px.pie(df_port, names="asset_class", values="current_value",
+                         title="Distribuição por Classe")
+        st.plotly_chart(fig_pie, use_container_width=True)
+    df_top = df_port.sort_values(by="current_value", ascending=False).head(5)
+    fig_bar = px.bar(df_top, x="asset_name", y="current_value",
+                     title="Top 5 Ativos por Valor",
+                     labels={"asset_name": "Ativo", "current_value": "Valor Atual"})
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+def relatorios_page(username: str):
+    st.subheader("Relatórios Avançados")
+    portfolio = get_portfolio(username)
+    if not portfolio:
+        st.info("Nenhum ativo para gerar relatório.")
+        return
+    df_port = pd.DataFrame(portfolio, columns=portfolio[0].keys())
+    asset_classes = df_port["asset_class"].dropna().unique().tolist()
+    selected_classes = st.multiselect("Filtrar por Classe de Ativo:", options=asset_classes, default=asset_classes)
+    min_value, max_value = st.slider("Filtrar por Valor Atual (R$):", 
+                                     float(df_port["current_value"].min()), 
+                                     float(df_port["current_value"].max()),
+                                     (float(df_port["current_value"].min()), float(df_port["current_value"].max())))
+    df_filtered = df_port[
+        (df_port["asset_class"].isin(selected_classes)) &
+        (df_port["current_value"] >= min_value) &
+        (df_port["current_value"] <= max_value)
+    ]
+    st.dataframe(df_filtered)
+    if st.button("Exportar Relatório em PDF"):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, f"Relatório de Carteira - {username}", ln=True, align="C")
+        pdf.set_font("Arial", size=12)
+        pdf.ln(10)
+        for index, row in df_filtered.iterrows():
+            pdf.cell(0, 10, f"{row['asset_name']} | Classe: {row['asset_class']} | Valor: R$ {row['current_value']:.2f}", ln=True)
+        pdf_output = pdf.output(dest="S").encode("latin1")
+        st.download_button(label="Baixar PDF", data=pdf_output, file_name="relatorio_carteira.pdf", mime="application/pdf")
+
+def historico_page(username: str):
+    st.subheader("Histórico de Atividades")
+    conn = get_db_connection()
+    cur = conn.execute("SELECT * FROM user_logs WHERE username = ? ORDER BY timestamp DESC", (username,))
+    logs = cur.fetchall()
+    conn.close()
+    if not logs:
+        st.info("Nenhuma atividade registrada.")
+        return
+    df_logs = pd.DataFrame(logs, columns=logs[0].keys())
+    event_types = df_logs["event_type"].unique().tolist()
+    selected_event = st.selectbox("Filtrar por Evento:", options=["Todos"] + event_types)
+    if selected_event != "Todos":
+        df_logs = df_logs[df_logs["event_type"] == selected_event]
+    st.dataframe(df_logs)
+
+def noticias_page(username: str):
+    st.subheader("Notícias do Mercado")
+    ticker_input = st.text_input("Digite o Ticker para buscar notícias (ex.: PETR4.SA)")
+    if ticker_input:
+        ticker = ticker_input.strip().upper()
+        stock = yf.Ticker(ticker)
+        try:
+            news_list = stock.news
+            if news_list:
+                for news in news_list:
+                    st.markdown(f"**{news.get('title', 'Sem Título')}**")
+                    st.markdown(news.get("link", ""))
+                    st.markdown(f"*{news.get('publisher', '')} - {news.get('providerPublishTime', '')}*")
+                    st.markdown("---")
+            else:
+                st.info("Nenhuma notícia encontrada para esse ticker.")
+        except Exception as e:
+            st.error(f"Erro ao buscar notícias: {e}")
+
+# ---------------- INTERFACE PRINCIPAL ------------------
 def main():
     st.set_page_config(page_title="Investimentos", layout="wide")
     st.sidebar.title("Navegação")
     
-    # Controle de sessão
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
 
-    # Tela de login e criação de usuário
     if not st.session_state.logged_in:
         menu = st.sidebar.selectbox("Menu", ["Login", "Criar Novo Usuário"])
         if menu == "Login":
@@ -288,23 +430,24 @@ def main():
         st.title("💰 App de Investimentos - Dashboard")
         st.sidebar.write(f"Usuário: {username}")
         
-        menu_opcao = st.sidebar.radio("Escolha uma ação",
-                                      ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Cotações", "Exportar Dados"])
+        menu_options = [
+            "Dashboard", "Carteira", "Nova Ação", "Classes de Ativos", 
+            "Simulação", "Cotações", "Relatórios", "Histórico", 
+            "Notícias", "Histórico de Preços", "Alertas", "Exportar Dados"
+        ]
+        menu_opcao = st.sidebar.radio("Escolha uma ação", options=menu_options)
         
-        # ---------------- CARTEIRA ----------------
-        if menu_opcao == "Carteira":
+        if menu_opcao == "Dashboard":
+            dashboard_page(username)
+        elif menu_opcao == "Carteira":
             st.subheader("Sua Carteira")
             portfolio = get_portfolio(username)
             if portfolio:
                 df_port = pd.DataFrame(portfolio, columns=portfolio[0].keys())
-                # Opção para ordenação dos ativos
                 order_by = st.selectbox("Ordenar por:", options=["asset_name", "current_value", "target_percent"])
                 df_port = df_port.sort_values(by=order_by, ascending=True)
-                
-                # Exibe o total da carteira
                 total_carteira = df_port["current_value"].sum()
                 st.metric(label="Valor Total da Carteira", value=f"R$ {total_carteira:,.2f}")
-                
                 st.dataframe(df_port)
                 st.write("### Atualize ou Remova Ativos")
                 for _, row in df_port.iterrows():
@@ -323,19 +466,13 @@ def main():
                         delete_asset(row["id"], username, row["asset_name"])
                         st.success(f"Ativo {row['asset_name']} removido.")
                         safe_rerun()
-                
-                # Gráfico de pizza mostrando a distribuição dos ativos
                 fig_pie = px.pie(df_port, names="asset_name", values="current_value",
                                  title="Distribuição da Carteira")
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
                 st.info("Nenhum ativo cadastrado.")
-        
-        # ---------------- NOVA AÇÃO – Cadastro Manual e Upload de Planilha ----------------
         elif menu_opcao == "Nova Ação":
             st.subheader("Adicionar Novo Ativo")
-            
-            # Cadastro Manual
             st.write("#### Cadastro Manual")
             classes = get_asset_classes(username)
             classes_list = [cl["class_name"] for cl in classes] if classes else []
@@ -347,7 +484,6 @@ def main():
                 else:
                     novo_classe = st.text_input("Classe do Ativo (sem classes definidas)")
                 cotacao_atual = None
-                # Botão para buscar a cotação
                 if novo_ticker:
                     if st.form_submit_button("Buscar Cotação Manual"):
                         cotacao_atual = fetch_stock_price(novo_ticker.upper())
@@ -355,7 +491,6 @@ def main():
                             st.success(f"Cotação atual de {novo_ticker.upper()}: R$ {cotacao_atual:.2f}")
                         else:
                             st.error("Ticker inválido ou cotação não encontrada.")
-                # Adicionar ativo manualmente
                 if st.form_submit_button("Adicionar Ativo Manualmente"):
                     if cotacao_atual is None:
                         valor_atual = st.number_input("Valor Atual", min_value=0.0, step=0.01)
@@ -367,38 +502,22 @@ def main():
                         add_asset(username, novo_ticker, novo_classe, novo_percentual, valor_atual)
                         st.success("Ativo adicionado manualmente com sucesso!")
                         safe_rerun()
-            
             st.markdown("---")
-            
-            # Upload de Planilha
             st.write("#### Upload de Planilha para Adição de Ativos")
             st.info("A planilha deve ter 4 colunas (de A a D): 'Ticker', 'Valor Aplicado', 'Saldo Bruto' e 'Classe do Ativo'. Você pode carregar arquivos CSV ou Excel (XLS/XLSX).")
             has_header = st.checkbox("O arquivo possui cabeçalho?", value=True, key="header_check")
             uploaded_file = st.file_uploader("Faça upload do arquivo", type=["csv", "xlsx", "xls"])
             if uploaded_file is not None:
                 try:
-                    # Se for CSV, usa a opção de cabeçalho conforme o checkbox
                     if uploaded_file.name.endswith(".csv"):
-                        if has_header:
-                            df = pd.read_csv(uploaded_file)
-                        else:
-                            df = pd.read_csv(uploaded_file, header=None)
-                    # Se for Excel, usa o engine apropriado, considerando o cabeçalho
+                        df = pd.read_csv(uploaded_file, header=0 if has_header else None)
                     elif uploaded_file.name.endswith((".xls", ".xlsx")):
                         if has_header:
-                            if uploaded_file.name.endswith(".xlsx"):
-                                df = pd.read_excel(uploaded_file, engine="openpyxl")
-                            else:
-                                df = pd.read_excel(uploaded_file, engine="xlrd")
+                            df = pd.read_excel(uploaded_file, engine="openpyxl" if uploaded_file.name.endswith(".xlsx") else "xlrd")
                         else:
-                            if uploaded_file.name.endswith(".xlsx"):
-                                df = pd.read_excel(uploaded_file, engine="openpyxl", header=None)
-                            else:
-                                df = pd.read_excel(uploaded_file, engine="xlrd", header=None)
+                            df = pd.read_excel(uploaded_file, engine="openpyxl" if uploaded_file.name.endswith(".xlsx") else "xlrd", header=None)
                     st.write("Visualização dos dados carregados:")
                     st.dataframe(df.head())
-                    
-                    # Itera em cada linha usando a ordem das colunas: A: ticker, B: valor aplicado, C: saldo bruto, D: classe
                     for index, row in df.iterrows():
                         try:
                             ticker = str(row.iloc[0]).strip().upper()
@@ -408,15 +527,12 @@ def main():
                         except Exception as e:
                             st.error(f"Erro ao processar a linha {index}: {e}")
                             continue
-                        # Usa o "Saldo Bruto" como o valor atual do ativo
                         current_value = saldo_bruto
                         add_asset(username, ticker, asset_class, 0.0, current_value)
                     st.success("Ativos adicionados via upload com sucesso!")
                     safe_rerun()
                 except Exception as e:
                     st.error("Erro ao processar o arquivo: " + str(e))
-        
-        # ---------------- CLASSES DE ATIVOS ----------------
         elif menu_opcao == "Classes de Ativos":
             st.subheader("Gerencie suas Classes de Ativos")
             classes = get_asset_classes(username)
@@ -448,8 +564,6 @@ def main():
                         add_asset_class(username, nova_classe, novo_valor_alvo)
                         st.success("Classe adicionada com sucesso!")
                         safe_rerun()
-        
-        # ---------------- SIMULAÇÃO ----------------
         elif menu_opcao == "Simulação":
             st.subheader("Simulação de Aporte e Rebalanceamento")
             portfolio = get_portfolio(username)
@@ -467,7 +581,6 @@ def main():
                                  title="Aporte Ideal por Ativo",
                                  labels={"asset_name": "Ativo", "aporte_ideal": "Aporte Ideal (R$)"})
                     st.plotly_chart(fig, use_container_width=True)
-                
                 st.write("### Simulação por Classe de Ativo")
                 asset_classes = get_asset_classes(username)
                 if asset_classes:
@@ -485,13 +598,10 @@ def main():
                     st.info("Nenhuma classe de ativo definida para simulação.")
             else:
                 st.info("Nenhum ativo cadastrado para simulação.")
-        
-        # ---------------- COTAÇÕES – Busca e Favoritos ----------------
         elif menu_opcao == "Cotações":
             st.subheader("Consulta de Ativos, Ações e FIIs da B3")
             search_query = st.text_input("Digite o ticker ou nome da empresa/fundo")
             usar_B3 = st.checkbox("Pesquisar na B3 (.SA automaticamente)", value=True)
-            
             if st.button("Buscar Ativo"):
                 if search_query:
                     ticker = search_query.strip().upper()
@@ -505,7 +615,6 @@ def main():
                         st.session_state["searched_asset"] = {"ticker": ticker, "shortName": shortName, "price": price}
                     else:
                         st.error("Ativo não encontrado. Verifique o ticker ou nome da empresa/fundo.")
-            
             if "searched_asset" in st.session_state:
                 asset = st.session_state["searched_asset"]
                 st.write(f"**{asset['shortName']} ({asset['ticker']})** - Cotação Atual: R$ {asset['price']:.2f}")
@@ -514,7 +623,6 @@ def main():
                     st.success(f"{asset['shortName']} adicionado aos favoritos!")
                     st.session_state.pop("searched_asset")
                     safe_rerun()
-            
             st_autorefresh(interval=30000, key="fav_autorefresh")
             st.write("### Favoritos")
             favorites = get_favorites(username)
@@ -536,8 +644,16 @@ def main():
                         st.write(f"Não foi possível obter a cotação para {ticker}.")
             else:
                 st.info("Nenhum ativo favoritado.")
-        
-        # ---------------- EXPORTAR DADOS ----------------
+        elif menu_opcao == "Relatórios":
+            relatorios_page(username)
+        elif menu_opcao == "Histórico":
+            historico_page(username)
+        elif menu_opcao == "Notícias":
+            noticias_page(username)
+        elif menu_opcao == "Histórico de Preços":
+            historico_precos_page(username)
+        elif menu_opcao == "Alertas":
+            alertas_page(username)
         elif menu_opcao == "Exportar Dados":
             st.subheader("Exportar sua Carteira")
             portfolio = get_portfolio(username)
@@ -548,11 +664,10 @@ def main():
             else:
                 st.info("Nenhum dado para exportar.")
         
-        # Botão de Logout
         if st.sidebar.button("Sair"):
             st.session_state.logged_in = False
             st.session_state.pop("searched_asset", None)
-            st.experimental_set_query_params()  # Limpa parâmetros de consulta, se houver
+            st.experimental_set_query_params()
             safe_rerun()
 
 if __name__ == "__main__":
