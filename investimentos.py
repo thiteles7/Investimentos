@@ -16,7 +16,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Criação das tabelas necessárias (usuários, carteira, classes e favoritos)
+# Criação das tabelas necessárias (usuários, carteira, classes, favoritos e logs de atividades)
 def create_tables():
     conn = get_db_connection()
     with conn:
@@ -53,8 +53,25 @@ def create_tables():
                 company_name TEXT
             )
         ''')
-
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                details TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
 create_tables()
+
+# Função para registrar logs de atividade
+def log_event(username: str, event_type: str, details: str = ""):
+    conn = get_db_connection()
+    with conn:
+        conn.execute(
+            "INSERT INTO user_logs (username, event_type, details) VALUES (?, ?, ?)",
+            (username, event_type, details)
+        )
 
 # ---------------- FUNÇÕES DE USUÁRIO ------------------
 def get_user(username: str):
@@ -68,6 +85,7 @@ def create_user(username: str, password: str):
     try:
         with conn:
             conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, pw_hash))
+        log_event(username, "Criação de usuário", "Usuário criado com sucesso.")
         return True
     except sqlite3.IntegrityError:
         return False
@@ -76,7 +94,10 @@ def verify_user(username: str, password: str):
     user = get_user(username)
     if user:
         stored_hash = user["password_hash"].encode('utf-8')
-        return bcrypt.checkpw(password.encode('utf-8'), stored_hash)
+        valid = bcrypt.checkpw(password.encode('utf-8'), stored_hash)
+        if valid:
+            log_event(username, "Login", "Usuário logado com sucesso.")
+        return valid
     return False
 
 # ---------------- FUNÇÕES DE CARTEIRA ------------------
@@ -92,19 +113,22 @@ def add_asset(username: str, asset_name: str, asset_class: str, target_percent: 
             "INSERT INTO portfolio (username, asset_name, asset_class, target_percent, current_value) VALUES (?, ?, ?, ?, ?)",
             (username, asset_name.upper(), asset_class, target_percent, current_value)
         )
+    log_event(username, "Adição de ativo", f"Ativo {asset_name.upper()} adicionado.")
 
-def update_asset(asset_id: int, asset_name: str, asset_class: str, target_percent: float, current_value: float):
+def update_asset(asset_id: int, asset_name: str, asset_class: str, target_percent: float, current_value: float, username: str):
     conn = get_db_connection()
     with conn:
         conn.execute(
             "UPDATE portfolio SET asset_name = ?, asset_class = ?, target_percent = ?, current_value = ? WHERE id = ?",
             (asset_name.upper(), asset_class, target_percent, current_value, asset_id)
         )
+    log_event(username, "Atualização de ativo", f"Ativo {asset_name.upper()} atualizado.")
 
-def delete_asset(asset_id: int):
+def delete_asset(asset_id: int, username: str, asset_name: str):
     conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM portfolio WHERE id = ?", (asset_id,))
+    log_event(username, "Exclusão de ativo", f"Ativo {asset_name} removido.")
 
 # ---------------- FUNÇÕES DE CLASSES DE ATIVOS ------------------
 def get_asset_classes(username: str):
@@ -119,19 +143,22 @@ def add_asset_class(username: str, class_name: str, target_value: float):
             "INSERT INTO asset_classes (username, class_name, target_value) VALUES (?, ?, ?)",
             (username, class_name, target_value)
         )
+    log_event(username, "Adição de classe de ativo", f"Classe {class_name} adicionada.")
 
-def update_asset_class(class_id: int, class_name: str, target_value: float):
+def update_asset_class(class_id: int, class_name: str, target_value: float, username: str):
     conn = get_db_connection()
     with conn:
         conn.execute(
             "UPDATE asset_classes SET class_name = ?, target_value = ? WHERE id = ?",
             (class_name, target_value, class_id)
         )
+    log_event(username, "Atualização de classe", f"Classe {class_name} atualizada.")
 
-def delete_asset_class(class_id: int):
+def delete_asset_class(class_id: int, username: str, class_name: str):
     conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM asset_classes WHERE id = ?", (class_id,))
+    log_event(username, "Exclusão de classe", f"Classe {class_name} removida.")
 
 # ---------------- FUNÇÕES DE FAVORITOS ------------------
 def get_favorites(username: str):
@@ -146,11 +173,13 @@ def add_favorite(username: str, ticker: str, company_name: str):
             "INSERT INTO favorites (username, ticker, company_name) VALUES (?, ?, ?)",
             (username, ticker.upper(), company_name)
         )
+    log_event(username, "Adição de favorito", f"Ticker {ticker.upper()} adicionado aos favoritos.")
 
-def delete_favorite(fav_id: int):
+def delete_favorite(fav_id: int, username: str, ticker: str):
     conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM favorites WHERE id = ?", (fav_id,))
+    log_event(username, "Exclusão de favorito", f"Ticker {ticker} removido dos favoritos.")
 
 # ---------------- FUNÇÕES FINANCEIRAS ------------------
 def fetch_stock_price(ticker: str):
@@ -185,6 +214,7 @@ def main():
     st.set_page_config(page_title="Investimentos", layout="wide")
     st.sidebar.title("Navegação")
     
+    # Controle de sessão
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
 
@@ -200,6 +230,7 @@ def main():
                     st.session_state.logged_in = True
                     st.session_state.username = username
                     st.success(f"Bem-vindo, {username}!")
+                    st.experimental_rerun()
                 else:
                     st.error("Nome de usuário ou senha incorretos.")
         else:
@@ -222,36 +253,52 @@ def main():
         menu_opcao = st.sidebar.radio("Escolha uma ação",
                                       ["Carteira", "Nova Ação", "Classes de Ativos", "Simulação", "Cotações", "Exportar Dados"])
         
-        # CARTEIRA
+        # ---------------- CARTEIRA ----------------
         if menu_opcao == "Carteira":
             st.subheader("Sua Carteira")
             portfolio = get_portfolio(username)
             if portfolio:
                 df_port = pd.DataFrame(portfolio, columns=portfolio[0].keys())
+                # Opção para ordenação dos ativos
+                order_by = st.selectbox("Ordenar por:", options=["asset_name", "current_value", "target_percent"])
+                df_port = df_port.sort_values(by=order_by, ascending=True)
+                
+                # Exibe o total da carteira
+                total_carteira = df_port["current_value"].sum()
+                st.metric(label="Valor Total da Carteira", value=f"R$ {total_carteira:,.2f}")
+                
                 st.dataframe(df_port)
                 st.write("### Atualize ou Remova Ativos")
                 for _, row in df_port.iterrows():
+                    # Usando chave única para cada botão
                     col1, col2, col3, col4, col5, col6 = st.columns([2, 2, 2, 2, 2, 1])
-                    novo_nome = col1.text_input("Ativo", value=row["asset_name"], key=f"nome_{row['id']}")
-                    novo_classe = col2.text_input("Classe", value=row["asset_class"] if row["asset_class"] else "", key=f"classe_{row['id']}")
-                    novo_percent = col3.number_input("% Alvo", value=row["target_percent"], key=f"percent_{row['id']}")
-                    novo_valor = col4.number_input("Valor Atual", value=row["current_value"], step=0.01, key=f"valor_{row['id']}")
-                    atualizar = col5.button("Atualizar", key=f"atualizar_{row['id']}")
-                    remover = col6.button("🗑️", key=f"remover_{row['id']}")
+                    novo_nome = col1.text_input("Ativo", value=row["asset_name"], key=f"nome_{row['id']}_{username}")
+                    novo_classe = col2.text_input("Classe", value=row["asset_class"] if row["asset_class"] else "", key=f"classe_{row['id']}_{username}")
+                    novo_percent = col3.number_input("% Alvo", value=row["target_percent"], key=f"percent_{row['id']}_{username}")
+                    novo_valor = col4.number_input("Valor Atual", value=row["current_value"], step=0.01, key=f"valor_{row['id']}_{username}")
+                    atualizar = col5.button("Atualizar", key=f"atualizar_{row['id']}_{username}")
+                    remover = col6.button("🗑️", key=f"remover_{row['id']}_{username}")
                     if atualizar:
-                        update_asset(row["id"], novo_nome, novo_classe, novo_percent, novo_valor)
+                        update_asset(row["id"], novo_nome, novo_classe, novo_percent, novo_valor, username)
                         st.success(f"Ativo {novo_nome} atualizado.")
+                        st.experimental_rerun()
                     if remover:
-                        delete_asset(row["id"])
-                        st.success(f"Ativo {novo_nome} removido.")
+                        delete_asset(row["id"], username, row["asset_name"])
+                        st.success(f"Ativo {row['asset_name']} removido.")
+                        st.experimental_rerun()
+                
+                # Gráfico de pizza mostrando a distribuição dos ativos
+                fig_pie = px.pie(df_port, names="asset_name", values="current_value",
+                                 title="Distribuição da Carteira")
+                st.plotly_chart(fig_pie, use_container_width=True)
             else:
                 st.info("Nenhum ativo cadastrado.")
         
-        # NOVA AÇÃO – Cadastro Manual e Upload de Planilha
+        # ---------------- NOVA AÇÃO – Cadastro Manual e Upload de Planilha ----------------
         elif menu_opcao == "Nova Ação":
             st.subheader("Adicionar Novo Ativo")
             
-            # --- Cadastro Manual ---
+            # Cadastro Manual
             st.write("#### Cadastro Manual")
             classes = get_asset_classes(username)
             classes_list = [cl["class_name"] for cl in classes] if classes else []
@@ -263,37 +310,41 @@ def main():
                 else:
                     novo_classe = st.text_input("Classe do Ativo (sem classes definidas)")
                 cotacao_atual = None
+                # Botão para buscar a cotação
                 if novo_ticker:
                     if st.form_submit_button("Buscar Cotação Manual"):
                         cotacao_atual = fetch_stock_price(novo_ticker.upper())
                         if cotacao_atual:
                             st.success(f"Cotação atual de {novo_ticker.upper()}: R$ {cotacao_atual:.2f}")
                         else:
-                            st.error("Não foi possível buscar a cotação.")
+                            st.error("Ticker inválido ou cotação não encontrada.")
+                # Adicionar ativo
                 if st.form_submit_button("Adicionar Ativo Manualmente"):
+                    # Validação: se não foi possível buscar cotação, o usuário deve informar o valor manualmente
                     if cotacao_atual is None:
                         valor_atual = st.number_input("Valor Atual", min_value=0.0, step=0.01)
                     else:
                         valor_atual = cotacao_atual
-                    add_asset(username, novo_ticker, novo_classe, novo_percentual, valor_atual)
-                    st.success("Ativo adicionado manualmente com sucesso!")
+                    # Validação do ticker para garantir que é válido antes de adicionar
+                    if fetch_stock_price(novo_ticker.upper()) is None:
+                        st.error("Não foi possível validar o ticker. Verifique se está correto.")
+                    else:
+                        add_asset(username, novo_ticker, novo_classe, novo_percentual, valor_atual)
+                        st.success("Ativo adicionado manualmente com sucesso!")
             
             st.markdown("---")
             
-            # --- Upload de Planilha ---
+            # Upload de Planilha
             st.write("#### Upload de Planilha para Adição de Ativos")
             st.info("A planilha deve ter 3 colunas (com ou sem cabeçalho): 'Ticker', 'Quantidade' e 'Classe de Ativo'.")
             uploaded_file = st.file_uploader("Faça upload do arquivo CSV", type=["csv"])
             if uploaded_file is not None:
                 try:
-                    # Tenta ler o CSV; se não houver cabeçalho, ajuste conforme necessário
                     df = pd.read_csv(uploaded_file)
                     st.write("Visualização dos dados carregados:")
                     st.dataframe(df.head())
                     
-                    # Itera em cada linha para adicionar os ativos
                     for index, row in df.iterrows():
-                        # Obtém os valores considerando que as três primeiras colunas são as desejadas
                         ticker = str(row[0]).strip().upper()
                         try:
                             quantity = float(row[1])
@@ -301,23 +352,20 @@ def main():
                             st.error(f"Erro na conversão da quantidade para o ticker {ticker}: {e}")
                             continue
                         asset_class = str(row[2]).strip()
-                        
-                        # Busca a cotação do ativo e calcula o valor investido
+                        # Busca a cotação; se não encontrada, o ativo recebe valor 0
                         price = fetch_stock_price(ticker)
                         if price is not None:
                             current_value = price * quantity
                         else:
                             st.warning(f"Cotação não encontrada para {ticker}. Valor definido como 0.")
                             current_value = 0.0
-                        
-                        # target_percent é definido como 0.0; pode ser ajustado posteriormente
                         add_asset(username, ticker, asset_class, 0.0, current_value)
-                    
                     st.success("Ativos adicionados via upload com sucesso!")
+                    st.experimental_rerun()
                 except Exception as e:
                     st.error("Erro ao processar o arquivo: " + str(e))
         
-        # CLASSES DE ATIVOS
+        # ---------------- CLASSES DE ATIVOS ----------------
         elif menu_opcao == "Classes de Ativos":
             st.subheader("Gerencie suas Classes de Ativos")
             classes = get_asset_classes(username)
@@ -326,16 +374,18 @@ def main():
                 st.dataframe(df_classes)
                 for _, row in df_classes.iterrows():
                     col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
-                    novo_nome = col1.text_input("Classe", value=row["class_name"], key=f"class_name_{row['id']}")
-                    novo_target = col2.number_input("Valor Alvo (R$)", value=row["target_value"], step=0.01, key=f"target_{row['id']}")
-                    atualizar = col3.button("Atualizar", key=f"update_class_{row['id']}")
-                    remover = col4.button("Remover", key=f"delete_class_{row['id']}")
+                    novo_nome = col1.text_input("Classe", value=row["class_name"], key=f"class_name_{row['id']}_{username}")
+                    novo_target = col2.number_input("Valor Alvo (R$)", value=row["target_value"], step=0.01, key=f"target_{row['id']}_{username}")
+                    atualizar = col3.button("Atualizar", key=f"update_class_{row['id']}_{username}")
+                    remover = col4.button("Remover", key=f"delete_class_{row['id']}_{username}")
                     if atualizar:
-                        update_asset_class(row["id"], novo_nome, novo_target)
+                        update_asset_class(row["id"], novo_nome, novo_target, username)
                         st.success(f"Classe {novo_nome} atualizada.")
+                        st.experimental_rerun()
                     if remover:
-                        delete_asset_class(row["id"])
-                        st.success(f"Classe {novo_nome} removida.")
+                        delete_asset_class(row["id"], username, row["class_name"])
+                        st.success(f"Classe {row['class_name']} removida.")
+                        st.experimental_rerun()
             else:
                 st.info("Nenhuma classe de ativo cadastrada.")
             st.write("### Adicionar Nova Classe de Ativo")
@@ -346,8 +396,9 @@ def main():
                     if nova_classe:
                         add_asset_class(username, nova_classe, novo_valor_alvo)
                         st.success("Classe adicionada com sucesso!")
+                        st.experimental_rerun()
         
-        # SIMULAÇÃO
+        # ---------------- SIMULAÇÃO ----------------
         elif menu_opcao == "Simulação":
             st.subheader("Simulação de Aporte e Rebalanceamento")
             portfolio = get_portfolio(username)
@@ -384,7 +435,7 @@ def main():
             else:
                 st.info("Nenhum ativo cadastrado para simulação.")
         
-        # COTAÇÕES – Busca e Favoritos
+        # ---------------- COTAÇÕES – Busca e Favoritos ----------------
         elif menu_opcao == "Cotações":
             st.subheader("Consulta de Ativos, Ações e FIIs da B3")
             search_query = st.text_input("Digite o ticker ou nome da empresa/fundo")
@@ -411,6 +462,7 @@ def main():
                     add_favorite(username, asset["ticker"], asset["shortName"])
                     st.success(f"{asset['shortName']} adicionado aos favoritos!")
                     st.session_state.pop("searched_asset")
+                    st.experimental_rerun()
             
             st_autorefresh(interval=30000, key="fav_autorefresh")
             st.write("### Favoritos")
@@ -425,15 +477,16 @@ def main():
                         col1, col2, col3 = st.columns([3, 2, 1])
                         col1.write(f"**{shortName} ({ticker})**")
                         col2.write(f"Cotação: R$ {price:.2f}")
-                        if col3.button("Remover", key=f"rem_fav_{fav['id']}"):
-                            delete_favorite(fav["id"])
+                        if col3.button("Remover", key=f"rem_fav_{fav['id']}_{username}"):
+                            delete_favorite(fav["id"], username, ticker)
                             st.success(f"{shortName} removido dos favoritos.")
+                            st.experimental_rerun()
                     else:
                         st.write(f"Não foi possível obter a cotação para {ticker}.")
             else:
                 st.info("Nenhum ativo favoritado.")
         
-        # EXPORTAR DADOS
+        # ---------------- EXPORTAR DADOS ----------------
         elif menu_opcao == "Exportar Dados":
             st.subheader("Exportar sua Carteira")
             portfolio = get_portfolio(username)
