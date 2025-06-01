@@ -1,0 +1,17 @@
+# .gitignore
+
+# Ignora o próprio banco SQLite
+investments.db
+
+# Embora não deva existir, ignora qualquer outro .db
+*.db
+
+# Ignora arquivos temporários do sistema
+__pycache__/
+*.py[cod]
+*.log
+
+# Arquivos do Streamlit (cache, etc.)
+.streamlit/
+
+# Outros arquivos que você não queira commitar
