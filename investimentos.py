@@ -6,7 +6,7 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 import os
-from fpdf import FPDF
+from fpdf import FPDF2
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime, timedelta
 import io
