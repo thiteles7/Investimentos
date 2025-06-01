@@ -8,7 +8,6 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 import io
-from fpdf import fpdf
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 from db import initialize_db, get_connection
