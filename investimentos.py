@@ -1,6 +1,13 @@
 # investimentos.py
 
 import streamlit as st
+
+def rerun():
+    """Compatibility wrapper to restart the Streamlit app."""
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:  # Fall back for older Streamlit versions
+        st.experimental_rerun()
 import sqlite3
 import bcrypt
 import yfinance as yf
@@ -292,11 +299,11 @@ def carteira_page(username: str):
         if atualizar:
             update_asset(row["id"], novo_nome, novo_classe, novo_percent, nova_qtd, novo_valor, username)
             st.success(f"Ativo {novo_nome} atualizado.")
-            st.experimental_rerun()
+            rerun()
         if remover:
             delete_asset(row["id"], username, row["asset_name"])
             st.success(f"Ativo {row['asset_name']} removido.")
-            st.experimental_rerun()
+            rerun()
 
     st.markdown("**Distribuição da Carteira por Ativo**")
     fig_pie2 = px.pie(df_port, names="asset_name", values="current_value", title="Alocação Atual")
@@ -344,7 +351,7 @@ def nova_acao_page(username: str):
                     add_asset(username, ticker, classe, 0.0, 0.0, saldo_bruto)
 
                 st.success("Carteira substituída com sucesso pelos dados da planilha!")
-                st.experimental_rerun()
+                rerun()
         except Exception as e:
             st.error("Erro ao processar a planilha: " + str(e))
 
@@ -363,11 +370,11 @@ def classes_de_ativos_page(username: str):
             if atualizar:
                 update_asset_class(row["id"], novo_nome, novo_target, username)
                 st.success(f"Classe {novo_nome} atualizada.")
-                st.experimental_rerun()
+                rerun()
             if remover:
                 delete_asset_class(row["id"], username, row["class_name"])
                 st.success(f"Classe {row['class_name']} removida.")
-                st.experimental_rerun()
+                rerun()
     else:
         st.info("Nenhuma classe cadastrada.")
     st.write("### Adicionar Nova Classe de Ativo")
@@ -378,7 +385,7 @@ def classes_de_ativos_page(username: str):
             if nova_classe:
                 add_asset_class(username, nova_classe, novo_valor_alvo)
                 st.success("Classe adicionada com sucesso!")
-                st.experimental_rerun()
+                rerun()
 
 def simulacao_page(username: str):
     st.subheader("Simulação de Aporte e Rebalanceamento por Classe")
@@ -448,7 +455,7 @@ def cotacoes_page(username: str):
             add_favorite(username, asset["ticker"], asset["name"])
             st.success(f"{asset['name']} adicionado aos favoritos.")
             st.session_state.pop("searched")
-            st.experimental_rerun()
+            rerun()
 
     st_autorefresh(interval=30000, key="refresh_favs")
     st.write("### Seus Favoritos")
@@ -466,7 +473,7 @@ def cotacoes_page(username: str):
                 if col3.button("Remover", key=f"btn_rem_{fav['id']}"):
                     delete_favorite(fav["id"], username, t)
                     st.success(f"{short} removido dos favoritos.")
-                    st.experimental_rerun()
+                    rerun()
             else:
                 st.write(f"Não foi possível obter cotação para {t}.")
     else:
@@ -586,7 +593,7 @@ def main():
                     st.session_state.logged_in = True
                     st.session_state.username = username
                     st.success(f"Bem-vindo, {username}!")
-                    st.experimental_rerun()
+                    rerun()
                 else:
                     st.error("Usuário ou senha incorretos.")
         else:
@@ -635,7 +642,7 @@ def main():
         if st.sidebar.button("Sair"):
             st.session_state.logged_in = False
             st.session_state.pop("searched", None)
-            st.experimental_rerun()
+            rerun()
 
 if __name__ == "__main__":
     main()
