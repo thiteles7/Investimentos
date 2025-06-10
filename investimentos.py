@@ -217,7 +217,20 @@ def update_portfolio_prices(username: str):
     conn.close()
 
 # ------------------------------------------------------------
-# 8) Cálculo de Alocação e Rebalance por Classe
+# 8) Busca de Tickers por Nome
+# ------------------------------------------------------------
+def search_tickers(query: str) -> list:
+    """Retorna uma lista de resultados de ticker para o termo informado."""
+    try:
+        results = yf.search(query)
+        if isinstance(results, dict):
+            return results.get("quotes", [])
+        return results
+    except Exception:
+        return []
+
+# ------------------------------------------------------------
+# 9) Cálculo de Alocação e Rebalance por Classe
 # ------------------------------------------------------------
 def calcular_alocacao_por_classe(df_port: pd.DataFrame) -> pd.DataFrame:
     """
@@ -456,25 +469,33 @@ def cotacoes_page(username: str):
     usar_B3 = st.checkbox("Pesquisar na B3 (.SA automaticamente)", value=True)
     if st.button("Buscar Ativo"):
         if query:
-            ticker = query.strip().upper()
-            if usar_B3 and not ticker.endswith(".SA"):
-                ticker += ".SA"
-            info = yf.Ticker(ticker).info
-            if info and "regularMarketPrice" in info:
-                price = info["regularMarketPrice"]
-                name = info.get("shortName", ticker)
-                st.write(f"**{name} ({ticker})** - Cotação: R$ {price:.2f}")
-                st.session_state["searched"] = {"ticker": ticker, "name": name, "price": price}
+            results = search_tickers(query.strip())
+            if results:
+                st.session_state["search_results"] = results
             else:
-                st.error("Ativo não encontrado ou sem dados.")
-    if "searched" in st.session_state:
-        asset = st.session_state["searched"]
-        st.write(f"**{asset['name']} ({asset['ticker']})** - Cotação: R$ {asset['price']:.2f}")
-        if st.button("Favoritar", key="btn_fav"):
-            add_favorite(username, asset["ticker"], asset["name"])
-            st.success(f"{asset['name']} adicionado aos favoritos.")
-            st.session_state.pop("searched")
-            rerun()
+                st.error("Ativo não encontrado.")
+                st.session_state.pop("search_results", None)
+        else:
+            st.warning("Informe um termo para busca.")
+
+    if "search_results" in st.session_state:
+        st.write("### Resultados da Busca")
+        for item in st.session_state["search_results"]:
+            ticker = item.get("symbol")
+            name = item.get("shortname", ticker)
+            t_use = ticker
+            if usar_B3 and not t_use.endswith(".SA"):
+                t_use += ".SA"
+            info = yf.Ticker(t_use).info
+            price = info.get("regularMarketPrice") if info else None
+            if price:
+                st.write(f"**{name} ({t_use})** - Cotação: R$ {price:.2f}")
+                if st.button("Favoritar", key=f"btn_fav_{ticker}"):
+                    add_favorite(username, t_use, name)
+                    st.success(f"{name} adicionado aos favoritos.")
+                    rerun()
+            else:
+                st.write(f"{name} ({t_use}) - dados não encontrados.")
 
     st_autorefresh(interval=30000, key="refresh_favs")
     st.write("### Seus Favoritos")
