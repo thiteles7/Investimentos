@@ -18,4 +18,12 @@ def test_initialize_db_creates_tables(tmp_path):
     expected = {"users", "portfolio", "asset_classes", "favorites", "user_logs"}
     for table in expected:
         assert table in tables
+
+    cursor.execute("PRAGMA table_info(portfolio)")
+    portfolio_cols = {row[1] for row in cursor.fetchall()}
+    assert "quantity" in portfolio_cols
+
+    cursor.execute("PRAGMA table_info(asset_classes)")
+    asset_cols = {row[1] for row in cursor.fetchall()}
+    assert "target_percent" in asset_cols
     conn.close()

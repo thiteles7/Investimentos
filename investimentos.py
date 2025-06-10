@@ -19,6 +19,9 @@ from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 from db import initialize_db, get_connection
 
+# Limite máximo de alocação por ativo (em %)
+MAX_ASSET_PERCENT = 5.0
+
 # ------------------------------------------------------------
 # 1) Inicialização do SQLite
 # ------------------------------------------------------------
@@ -125,22 +128,22 @@ def get_asset_classes(username: str) -> list:
     conn.close()
     return results
 
-def add_asset_class(username: str, class_name: str, target_value: float):
+def add_asset_class(username: str, class_name: str, target_percent: float):
     conn = get_connection()
     with conn:
         conn.execute(
-            "INSERT INTO asset_classes (username, class_name, target_value) VALUES (?, ?, ?)",
-            (username, class_name, target_value)
+            "INSERT INTO asset_classes (username, class_name, target_percent) VALUES (?, ?, ?)",
+            (username, class_name, target_percent)
         )
     log_event(username, "Adição de classe de ativo", f"Classe {class_name} adicionada.")
     conn.close()
 
-def update_asset_class(class_id: int, class_name: str, target_value: float, username: str):
+def update_asset_class(class_id: int, class_name: str, target_percent: float, username: str):
     conn = get_connection()
     with conn:
         conn.execute(
-            "UPDATE asset_classes SET class_name = ?, target_value = ? WHERE id = ?",
-            (class_name, target_value, class_id)
+            "UPDATE asset_classes SET class_name = ?, target_percent = ? WHERE id = ?",
+            (class_name, target_percent, class_id)
         )
     log_event(username, "Atualização de classe", f"Classe {class_name} atualizada.")
     conn.close()
@@ -220,7 +223,8 @@ def calcular_alocacao_por_classe(df_port: pd.DataFrame) -> pd.DataFrame:
     """
     Retorna um DataFrame agrupado por asset_class com:
     - total_current_value (soma de current_value por classe)
-    - target_value (obtido da tabela asset_classes)
+    - target_percent (alvo percentual da classe)
+    - target_value calculado com base no valor total da carteira
     - diff = target_value - total_current_value
     """
     df_cls_sum = df_port.groupby("asset_class")["current_value"].sum().reset_index()
@@ -230,10 +234,12 @@ def calcular_alocacao_por_classe(df_port: pd.DataFrame) -> pd.DataFrame:
     if classes:
         df_classes = pd.DataFrame(classes, columns=classes[0].keys()).rename(columns={"class_name": "asset_class"})
     else:
-        df_classes = pd.DataFrame(columns=["asset_class", "target_value"])
+        df_classes = pd.DataFrame(columns=["asset_class", "target_percent"])
 
+    total_port = df_port["current_value"].sum()
     df_merged = pd.merge(df_cls_sum, df_classes, how="left", on="asset_class")
-    df_merged["target_value"] = df_merged["target_value"].fillna(0.0)
+    df_merged["target_percent"] = df_merged["target_percent"].fillna(0.0)
+    df_merged["target_value"] = df_merged["target_percent"] / 100.0 * total_port
     df_merged["diff"] = df_merged["target_value"] - df_merged["total_current_value"]
     return df_merged
 
@@ -276,13 +282,24 @@ def carteira_page(username: str):
 
     df_port = pd.DataFrame(assets, columns=assets[0].keys())
     total = df_port["current_value"].sum()
+    df_port["percent_of_total"] = df_port["current_value"] / total * 100
     st.metric(label="Valor Total da Carteira", value=f"R$ {total:,.2f}")
 
-    order_by = st.selectbox("Ordenar por:", options=["asset_name", "current_value", "target_percent"])
+    acima_limite = df_port[df_port["percent_of_total"] > MAX_ASSET_PERCENT]
+    if not acima_limite.empty:
+        st.warning(
+            "Ativos excedendo limite de {:.1f}%: {}".format(
+                MAX_ASSET_PERCENT,
+                ", ".join(acima_limite["asset_name"].tolist()),
+            )
+        )
+
+    order_by = st.selectbox("Ordenar por:", options=["asset_name", "current_value", "target_percent", "percent_of_total"])
     df_port = df_port.sort_values(by=order_by, ascending=True)
     st.dataframe(df_port.style.format({
         "current_value": "R$ {:,.2f}",
         "target_percent": "{:.2f}%",
+        "percent_of_total": "{:.2f}%",
         "quantity": "{:.0f}"
     }), height=300)
 
@@ -364,7 +381,7 @@ def classes_de_ativos_page(username: str):
         for _, row in df_classes.iterrows():
             col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
             novo_nome = col1.text_input("Classe", value=row["class_name"], key=f"class_name_{row['id']}_{username}")
-            novo_target = col2.number_input("Valor Alvo (R$)", value=row["target_value"], step=0.01, key=f"target_{row['id']}_{username}")
+            novo_target = col2.number_input("Alocação Alvo (%)", value=row["target_percent"], step=0.01, key=f"target_{row['id']}_{username}")
             atualizar = col3.button("Atualizar", key=f"update_class_{row['id']}_{username}")
             remover = col4.button("Remover", key=f"delete_class_{row['id']}_{username}")
             if atualizar:
@@ -380,7 +397,7 @@ def classes_de_ativos_page(username: str):
     st.write("### Adicionar Nova Classe de Ativo")
     with st.form("nova_classe", clear_on_submit=True):
         nova_classe = st.text_input("Nome da Classe")
-        novo_valor_alvo = st.number_input("Valor Alvo (R$)", min_value=0.0, step=0.01)
+        novo_valor_alvo = st.number_input("Alocação Alvo (%)", min_value=0.0, step=0.01)
         if st.form_submit_button("Adicionar Classe"):
             if nova_classe:
                 add_asset_class(username, nova_classe, novo_valor_alvo)
@@ -414,14 +431,16 @@ def simulacao_page(username: str):
 
         st.write(f"**Total Atual (todas classes):** R$ {total_atual:,.2f} | **Total c/ Aporte:** R$ {total_new:,.2f}")
         st.write("#### Sugestão de Aporte/Saque por Classe")
-        df_report = df_cls[["asset_class", "total_current_value", "target_value", "aporte_ideal"]].rename(columns={
+        df_report = df_cls[["asset_class", "total_current_value", "target_percent", "target_value", "aporte_ideal"]].rename(columns={
             "asset_class": "Classe",
             "total_current_value": "Atual (R$)",
+            "target_percent": "Alvo (%)",
             "target_value": "Alvo (R$)",
             "aporte_ideal": "Diferença (R$)"
         })
         st.dataframe(df_report.style.format({
             "Atual (R$)": "R$ {:,.2f}",
+            "Alvo (%)": "{:.2f}%",
             "Alvo (R$)": "R$ {:,.2f}",
             "Diferença (R$)": "R$ {:,.2f}"
         }), height=300)
@@ -495,11 +514,13 @@ def relatorios_avancados_page(username: str):
     df_display = df_cls.rename(columns={
         "asset_class": "Classe",
         "total_current_value": "Atual (R$)",
+        "target_percent": "Alvo (%)",
         "target_value": "Alvo (R$)",
         "diff": "Diferença (R$)"
     })
     st.dataframe(df_display.style.format({
         "Atual (R$)": "R$ {:,.2f}",
+        "Alvo (%)": "{:.2f}%",
         "Alvo (R$)": "R$ {:,.2f}",
         "Diferença (R$)": "R$ {:,.2f}"
     }), height=300)
@@ -528,7 +549,7 @@ def relatorios_avancados_page(username: str):
         pdf.ln(8)
         pdf.set_font("Arial", size=12)
         for _, row in df_cls.iterrows():
-            pdf.cell(0, 8, f"{row['asset_class']} | Atual: R$ {row['total_current_value']:,.2f} | Alvo: R$ {row['target_value']:,.2f} | Diferença: R$ {row['diff']:,.2f}", ln=True)
+            pdf.cell(0, 8, f"{row['asset_class']} | Atual: R$ {row['total_current_value']:,.2f} | Alvo: {row['target_percent']:.2f}% (R$ {row['target_value']:,.2f}) | Diferença: R$ {row['diff']:,.2f}", ln=True)
         pdf_output = pdf.output(dest="S").encode("latin1")
         st.download_button(label="Baixar PDF", data=pdf_output, file_name="relatorio_classe.pdf", mime="application/pdf")
 
