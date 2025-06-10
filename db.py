@@ -35,6 +35,7 @@ def initialize_db():
                 asset_name TEXT NOT NULL,
                 asset_class TEXT,
                 target_percent REAL NOT NULL,
+                quantity REAL NOT NULL DEFAULT 0.0,
                 current_value REAL NOT NULL
             );
         """)
@@ -44,7 +45,7 @@ def initialize_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL,
                 class_name TEXT NOT NULL,
-                target_value REAL NOT NULL DEFAULT 0.0
+                target_percent REAL NOT NULL DEFAULT 0.0
             );
         """)
         # Favoritos
@@ -66,4 +67,15 @@ def initialize_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             );
         """)
+    # Verifica se as colunas extras existem e cria caso contrário
+    cur = conn.execute("PRAGMA table_info(portfolio)")
+    cols = {row[1] for row in cur.fetchall()}
+    if "quantity" not in cols:
+        conn.execute("ALTER TABLE portfolio ADD COLUMN quantity REAL NOT NULL DEFAULT 0.0")
+
+    cur = conn.execute("PRAGMA table_info(asset_classes)")
+    cols = {row[1] for row in cur.fetchall()}
+    if "target_percent" not in cols:
+        conn.execute("ALTER TABLE asset_classes ADD COLUMN target_percent REAL NOT NULL DEFAULT 0.0")
+
     conn.close()
